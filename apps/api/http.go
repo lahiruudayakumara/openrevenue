@@ -2,15 +2,16 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
 	app "github.com/opencorex-org/openrevenue/internal/administration/application"
 	filing "github.com/opencorex-org/openrevenue/internal/filing/domain"
-	ledger "github.com/opencorex-org/openrevenue/internal/ledger/domain"
+	foundation "github.com/opencorex-org/openrevenue/pkg/domain"
 	mw "github.com/opencorex-org/openrevenue/pkg/middleware"
 	"github.com/opencorex-org/openrevenue/pkg/problem"
-	"io"
-	"net/http"
-	"time"
 )
 
 type Handler struct{ s *app.Service }
@@ -27,10 +28,18 @@ func Router(s *app.Service) http.Handler {
 	})
 	r.Get("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		_, _ = w.Write([]byte("# HELP openrevenue_up Whether the API process is running.\n# TYPE openrevenue_up gauge\nopenrevenue_up 1\n"))
+		_, _ = fmt.Fprintf(
+			w,
+			"# HELP openrevenue_up Whether the API process is running.\n"+
+				"# TYPE openrevenue_up gauge\nopenrevenue_up 1\n"+
+				"# HELP openrevenue_domain_context_rejections_total Requests rejected before application dispatch because tenant, jurisdiction, actor, or correlation context was invalid.\n"+
+				"# TYPE openrevenue_domain_context_rejections_total counter\n"+
+				"openrevenue_domain_context_rejections_total %d\n",
+			mw.RejectedDomainContexts(),
+		)
 	})
 	r.Group(func(r chi.Router) {
-		r.Use(mw.Authenticate)
+		r.Use(mw.Authenticate, mw.RequireDomainContext)
 		r.Route("/api/v1", func(r chi.Router) {
 			r.Post("/taxpayers", h.createTaxpayer)
 			r.Post("/taxpayers/{taxpayerID}/tax-registrations", h.register)
@@ -58,11 +67,12 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	}
 	return true
 }
-func actor(r *http.Request) string {
-	if v := r.Header.Get("X-Actor-ID"); v != "" {
-		return v
+func requestContext(r *http.Request) foundation.Context {
+	scope, ok := mw.DomainContext(r.Context())
+	if !ok {
+		panic("domain context middleware is not installed")
 	}
-	return "authenticated-user"
+	return scope
 }
 func (h *Handler) createTaxpayer(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -77,7 +87,7 @@ func (h *Handler) createTaxpayer(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, 400, "Idempotency key required", nil)
 		return
 	}
-	v, err := h.s.CreateTaxpayer(in.Name, in.Identifier, actor(r), mw.CorrelationID(r.Context()), key)
+	v, err := h.s.CreateTaxpayer(requestContext(r), in.Name, in.Identifier, key)
 	if err != nil {
 		problem.Write(w, r, 422, "Taxpayer creation failed", err)
 		return
@@ -91,7 +101,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	v, err := h.s.Register(chi.URLParam(r, "taxpayerID"), in.TaxType, actor(r), mw.CorrelationID(r.Context()))
+	v, err := h.s.Register(requestContext(r), chi.URLParam(r, "taxpayerID"), in.TaxType)
 	if err != nil {
 		problem.Write(w, r, 422, "Registration failed", err)
 		return
@@ -108,7 +118,7 @@ func (h *Handler) draft(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	v, err := h.s.DraftReturn(in.TaxpayerID, in.RegistrationID, in.PeriodID, in.Lines, actor(r), mw.CorrelationID(r.Context()))
+	v, err := h.s.DraftReturn(requestContext(r), in.TaxpayerID, in.RegistrationID, in.PeriodID, in.Lines)
 	if err != nil {
 		problem.Write(w, r, 422, "Draft failed", err)
 		return
@@ -116,7 +126,7 @@ func (h *Handler) draft(w http.ResponseWriter, r *http.Request) {
 	write(w, 201, v)
 }
 func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
-	v, err := h.s.ValidateReturn(chi.URLParam(r, "returnID"), actor(r), mw.CorrelationID(r.Context()))
+	v, err := h.s.ValidateReturn(requestContext(r), chi.URLParam(r, "returnID"))
 	if err != nil {
 		problem.Write(w, r, 422, "Validation failed", err)
 		return
@@ -124,7 +134,7 @@ func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, v)
 }
 func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
-	v, err := h.s.SubmitAndAssess(r.Context(), chi.URLParam(r, "returnID"), actor(r), mw.CorrelationID(r.Context()))
+	v, err := h.s.SubmitAndAssess(r.Context(), requestContext(r), chi.URLParam(r, "returnID"))
 	if err != nil {
 		problem.Write(w, r, 422, "Submission failed", err)
 		return
@@ -141,7 +151,17 @@ func (h *Handler) payment(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	v, err := h.s.RecordPayment(in.TaxpayerID, in.AssessmentID, ledger.Money{Minor: in.AmountMinor, Currency: in.Currency}, actor(r), mw.CorrelationID(r.Context()))
+	currency, err := foundation.NewCurrency(in.Currency, 2)
+	if err != nil {
+		problem.Write(w, r, 422, "Payment failed", err)
+		return
+	}
+	amount, err := foundation.NewMoney(in.AmountMinor, currency)
+	if err != nil {
+		problem.Write(w, r, 422, "Payment failed", err)
+		return
+	}
+	v, err := h.s.RecordPayment(requestContext(r), in.TaxpayerID, in.AssessmentID, amount)
 	if err != nil {
 		problem.Write(w, r, 422, "Payment failed", err)
 		return
@@ -149,8 +169,24 @@ func (h *Handler) payment(w http.ResponseWriter, r *http.Request) {
 	write(w, 201, v)
 }
 func (h *Handler) ledger(w http.ResponseWriter, r *http.Request) {
-	write(w, 200, map[string]any{"entries": h.s.Ledger(chi.URLParam(r, "taxpayerID")), "asOf": time.Now().UTC()})
+	scope := requestContext(r)
+	entries, err := h.s.Ledger(scope, chi.URLParam(r, "taxpayerID"))
+	if err != nil {
+		problem.Write(w, r, 422, "Ledger query failed", err)
+		return
+	}
+	asOf, err := h.s.CurrentTime(scope)
+	if err != nil {
+		problem.Write(w, r, 422, "Ledger query failed", err)
+		return
+	}
+	write(w, 200, map[string]any{"entries": entries, "asOf": asOf})
 }
 func (h *Handler) audits(w http.ResponseWriter, r *http.Request) {
-	write(w, 200, map[string]any{"events": h.s.Audits()})
+	events, err := h.s.Audits(requestContext(r))
+	if err != nil {
+		problem.Write(w, r, 422, "Audit query failed", err)
+		return
+	}
+	write(w, 200, map[string]any{"events": events})
 }
