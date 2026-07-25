@@ -3,7 +3,8 @@
 .PHONY: help bootstrap setup doctor validate-config dev api worker scheduler web \
 	services-up services-down services-logs services-status go-format go-format-check \
 	go-lint go-test web-install web-format web-format-check web-lint web-typecheck \
-	web-test web-build format format-check lint typecheck test build quality migrate seed generate
+	web-test web-build format format-check lint typecheck test build quality migrate seed generate \
+	contracts workflow-policy
 
 help: ## Show supported developer commands
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "%-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -80,6 +81,13 @@ web-test: ## Run frontend tests
 web-build: ## Build all frontend workspaces
 	corepack pnpm build
 
+contracts: ## Validate OpenAPI and event JSON Schema contracts
+	corepack pnpm contracts
+
+workflow-policy: ## Validate GitHub Actions syntax and security policy
+	@go tool actionlint
+	@bash scripts/ci/validate-workflows.sh
+
 format: go-format web-format ## Format all supported source
 
 format-check: go-format-check web-format-check ## Check formatting exactly as CI does
@@ -93,7 +101,7 @@ test: go-test web-test ## Run backend and frontend tests
 build: web-build ## Build deployable artifacts
 	go build ./...
 
-quality: validate-config format-check lint typecheck test build ## Run the complete local/CI quality baseline
+quality: validate-config workflow-policy format-check lint typecheck test contracts build ## Run the complete local/CI quality baseline
 
 migrate: ## Apply database migrations
 	migrate -path database/migrations -database "$${DATABASE_URL:-postgres://openrevenue:openrevenue_dev_only@localhost:5432/openrevenue?sslmode=disable}" up
