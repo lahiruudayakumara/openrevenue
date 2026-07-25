@@ -12,10 +12,14 @@
         "lint": "turbo run lint",
         "typecheck": "turbo run typecheck",
         "test": "turbo run test",
+        "contracts": "redocly lint contracts/openapi/*.yaml --extends recommended && node scripts/ci/validate-event-schemas.mjs",
         "format": "prettier --write \"apps/**/*.{ts,tsx}\" \"web/**/*.{ts,tsx}\"",
         "format:check": "prettier --check \"apps/**/*.{ts,tsx}\" \"web/**/*.{ts,tsx}\""
     },
     "devDependencies": {
+        "@redocly/cli": "2.40.0",
+        "ajv": "8.20.0",
+        "ajv-formats": "3.0.1",
         "prettier": "^3.6.2",
         "turbo": "^2.5.5",
         "typescript": "^5.8.3"

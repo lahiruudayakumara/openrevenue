@@ -1,17 +1,47 @@
 name: Security
-on: [pull_request, push]
-permissions: {contents: read, security-events: write}
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+  schedule:
+    - cron: "41 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  scan:
+  repository-scan:
     if: ${{ github.repository == 'opencorex-org/openrevenue' }}
+    name: Repository vulnerabilities, secrets, and misconfigurations
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          fetch-depth: 0
-      - name: Scan Git history for secrets
-        uses: docker://ghcr.io/gitleaks/gitleaks:v8.30.1
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+      - name: Generate source SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          args: git --redact --verbose --no-banner /github/workspace
-      - uses: anchore/sbom-action@v0
-        with: {path: ., artifact-name: openrevenue-sbom.spdx.json}
+          path: .
+          format: spdx-json
+          output-file: openrevenue-source.spdx.json
+          upload-artifact: false
+      - name: Retain SBOM for investigation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: source-sbom
+          path: openrevenue-source.spdx.json
+          if-no-files-found: error
+          retention-days: 14

@@ -1,10 +1,25 @@
 name: Dependency review
-on: [pull_request]
-permissions: {contents: read}
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  review:
+  dependency-review:
     if: ${{ github.repository == 'opencorex-org/openrevenue' }}
+    name: Dependency vulnerability and license policy
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/dependency-review-action@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          license-check: true
+          deny-licenses: AGPL-1.0-only, AGPL-1.0-or-later, SSPL-1.0
