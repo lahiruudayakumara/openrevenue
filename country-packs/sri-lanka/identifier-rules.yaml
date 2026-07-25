@@ -1,1 +1,6 @@
-rules: [{type: DEMO_ID, pattern: '^DEMO-[0-9]{3,12}$', exampleOnly: true}]
+rules:
+  - type: DEMO_ID
+    normalization: UPPER_ALPHANUMERIC
+    inputPattern: '^DEMO-[0-9]{3,12}$'
+    canonicalPattern: '^DEMO[0-9]{3,12}$'
+    exampleOnly: true

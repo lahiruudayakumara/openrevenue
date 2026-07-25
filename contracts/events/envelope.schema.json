@@ -1,1 +1,89 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://openrevenue.org/contracts/events/envelope.schema.json","type":"object","required":["eventId","eventType","eventVersion","occurredAt","correlationId","causationId","actor","tenant","country","data","metadata"],"properties":{"eventId":{"type":"string","format":"uuid"},"eventType":{"enum":["TaxpayerRegistered","TaxRegistrationSubmitted","TaxRegistrationApproved","ReturnCreated","ReturnValidated","ReturnSubmitted","ReturnAmended","AssessmentCreated","PaymentReceived","PaymentAllocated","LedgerEntryPosted","DocumentUploaded","NotificationRequested","AuditEventRecorded"]},"eventVersion":{"type":"integer","minimum":1},"occurredAt":{"type":"string","format":"date-time"},"correlationId":{"type":"string"},"causationId":{"type":"string"},"actor":{"type":"object"},"tenant":{"type":"string"},"country":{"type":"string"},"data":{"type":"object"},"metadata":{"type":"object"}},"additionalProperties":false}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openrevenue.org/contracts/events/envelope.schema.json",
+  "type": "object",
+  "required": [
+    "eventId",
+    "eventType",
+    "eventVersion",
+    "occurredAt",
+    "correlationId",
+    "causationId",
+    "actor",
+    "tenant",
+    "jurisdiction",
+    "data",
+    "metadata"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "eventType": {
+      "enum": [
+        "TaxpayerRegistered",
+        "TaxRegistrationSubmitted",
+        "TaxRegistrationApproved",
+        "ReturnCreated",
+        "ReturnValidated",
+        "ReturnSubmitted",
+        "ReturnAmended",
+        "AssessmentCreated",
+        "PaymentReceived",
+        "PaymentAllocated",
+        "LedgerEntryPosted",
+        "DocumentUploaded",
+        "NotificationRequested",
+        "AuditEventRecorded"
+      ]
+    },
+    "eventVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "correlationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?$"
+    },
+    "causationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "actor": {
+      "type": "object",
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": {
+          "enum": ["USER", "SERVICE", "SYSTEM"]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "additionalProperties": false
+    },
+    "tenant": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$"
+    },
+    "jurisdiction": {
+      "type": "string",
+      "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,3})?$"
+    },
+    "data": {
+      "type": "object"
+    },
+    "metadata": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

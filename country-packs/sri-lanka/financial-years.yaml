@@ -1,1 +1,5 @@
-financialYears: [{id: FY-DEMO-2026, startsOn: 2026-01-01, endsOn: 2026-12-31, exampleOnly: true}]
+financialYears:
+  - id: FY-DEMO-2026
+    startsOn: 2026-01-01
+    endsBefore: 2027-01-01
+    exampleOnly: true
