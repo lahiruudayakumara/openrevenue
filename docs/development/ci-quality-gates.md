@@ -59,7 +59,7 @@ team for contracts, database, workflow, release, and security changes:
 | Check | Primary owner | First response |
 | --- | --- | --- |
 | Backend or frontend | Change author/module owner | Reproduce with the matching `make` target |
-| Contracts | API maintainers | Run Spectral/AJV and inspect compatibility |
+| Contracts | API maintainers | Run Redocly/AJV and inspect compatibility |
 | Dependency or security | Security maintainers | Confirm advisory, secret, license, or false-positive evidence |
 | Container, environment, workflow policy | Platform maintainers | Inspect build inputs, pins, cache, and runner logs |
 | Documentation | Change author | Correct or explicitly exclude non-public/local links |

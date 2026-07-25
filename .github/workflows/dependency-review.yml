@@ -23,4 +23,3 @@ jobs:
           fail-on-severity: moderate
           license-check: true
           deny-licenses: AGPL-1.0-only, AGPL-1.0-or-later, SSPL-1.0
-          comment-summary-in-pr: always
