@@ -1,27 +1,96 @@
 name: openrevenue
+
 services:
   postgres:
-    image: "postgres:17-alpine"
-    environment: {POSTGRES_DB: openrevenue, POSTGRES_USER: openrevenue, POSTGRES_PASSWORD: openrevenue_dev_only}
-    ports: ["5432:5432"]
-    volumes: ["postgres-data:/var/lib/postgresql/data"]
-    healthcheck: {test: [CMD-SHELL, "pg_isready -U openrevenue"], interval: 5s, timeout: 3s, retries: 10}
-  redis: {image: "redis:7.4-alpine", ports: ["6379:6379"]}
+    image: "${POSTGRES_IMAGE:-postgres:17.10-alpine}"
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-openrevenue}"
+      POSTGRES_USER: "${POSTGRES_USER:-openrevenue}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-openrevenue_dev_only}"
+    ports:
+      - "5432:5432"
+    volumes:
+      - "postgres-data:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  redis:
+    image: "${REDIS_IMAGE:-redis:7.4.9-alpine}"
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - "redis-data:/data"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
   minio:
-    image: "minio/minio:latest"
-    command: "server /data --console-address :9001"
-    environment: {MINIO_ROOT_USER: openrevenue, MINIO_ROOT_PASSWORD: openrevenue_dev_only}
-    ports: ["9000:9000", "9001:9001"]
-  mailpit: {image: "axllent/mailpit:latest", ports: ["1025:1025", "8025:8025"]}
+    image: "${MINIO_IMAGE:-minio/minio:RELEASE.2025-09-07T16-13-09Z}"
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-openrevenue}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-openrevenue_dev_only}"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - "minio-data:/data"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  mailpit:
+    image: "${MAILPIT_IMAGE:-axllent/mailpit:v1.30.4}"
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    restart: unless-stopped
+
   prometheus:
-    image: "prom/prometheus:latest"
+    image: "${PROMETHEUS_IMAGE:-prom/prometheus:v3.5.0}"
     command: ["--config.file=/etc/prometheus/prometheus.yml"]
-    volumes: ["./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
-    ports: ["9090:9090"]
-  grafana: {image: "grafana/grafana:latest", ports: ["3001:3000"]}
+    volumes:
+      - "./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: "${GRAFANA_IMAGE:-grafana/grafana:12.3.9}"
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-openrevenue_dev_only}"
+    ports:
+      - "3001:3000"
+    volumes:
+      - "grafana-data:/var/lib/grafana"
+    restart: unless-stopped
+
   otel-collector:
-    image: "otel/opentelemetry-collector-contrib:latest"
+    image: "${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.130.1}"
     command: ["--config=/etc/otel/config.yaml"]
-    volumes: ["./infrastructure/monitoring/otel-collector.yaml:/etc/otel/config.yaml:ro"]
-    ports: ["4317:4317", "4318:4318"]
-volumes: {postgres-data: {}}
+    volumes:
+      - "./infrastructure/monitoring/otel-collector.yaml:/etc/otel/config.yaml:ro"
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  grafana-data:
