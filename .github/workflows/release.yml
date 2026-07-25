@@ -3,6 +3,7 @@ on: {push: {tags: ['v*']}}
 permissions: {contents: write, packages: write, id-token: write}
 jobs:
   release:
+    if: ${{ github.repository == 'opencorex-org/openrevenue' }}
     runs-on: ubuntu-latest
     environment: production
     steps:

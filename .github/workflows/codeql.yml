@@ -3,6 +3,7 @@ on: [pull_request, push]
 permissions: {contents: read, security-events: write}
 jobs:
   analyze:
+    if: ${{ github.repository == 'opencorex-org/openrevenue' }}
     runs-on: ubuntu-latest
     strategy: {matrix: {language: [go, javascript-typescript]}}
     steps:
