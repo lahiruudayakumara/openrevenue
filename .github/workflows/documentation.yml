@@ -3,6 +3,7 @@ on: [pull_request]
 permissions: {contents: read}
 jobs:
   links:
+    if: ${{ github.repository == 'opencorex-org/openrevenue' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
