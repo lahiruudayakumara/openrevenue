@@ -21,7 +21,7 @@ The first vertical slice supports creating a taxpayer, approving a sample tax re
 
 This is a domain-driven modular monolith. Modules own their data and expose application interfaces; domain code has no framework or persistence dependency. Cross-module asynchronous work uses a transactional outbox. Money uses signed 64-bit minor units and ISO-style currency codes. Returns retain form/rule versions. Ledger and audit tables reject updates and deletes.
 
-See [architecture overview](docs/architecture/overview.md), [domain boundaries](docs/architecture/domain-boundaries.md), [country packs](docs/architecture/country-pack-architecture.md), and [security architecture](docs/architecture/security-architecture.md).
+See [architecture overview](docs/architecture/overview.md), [domain boundaries](docs/architecture/domain-boundaries.md), the [foundational domain model](docs/architecture/foundational-domain-model.md), [country packs](docs/architecture/country-pack-architecture.md), and [security architecture](docs/architecture/security-architecture.md).
 
 ## Quick start
 
