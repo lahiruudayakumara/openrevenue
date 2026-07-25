@@ -21,6 +21,65 @@ The first vertical slice supports creating a taxpayer, approving a sample tax re
 
 This is a domain-driven modular monolith. Modules own their data and expose application interfaces; domain code has no framework or persistence dependency. Cross-module asynchronous work uses a transactional outbox. Money uses signed 64-bit minor units and ISO-style currency codes. Returns retain form/rule versions. Ledger and audit tables reject updates and deletes.
 
+### High-level architecture
+
+```mermaid
+flowchart TB
+  users["Taxpayers, officers, administrators,<br/>government systems, and payment providers"]
+
+  subgraph edge["Edge and identity"]
+    gateway["CDN / WAF / API gateway"]
+    identity["OIDC identity provider"]
+  end
+
+  subgraph clients["Browser applications"]
+    public["Public site"]
+    taxpayer["Taxpayer portal"]
+    officer["Officer portal"]
+    admin["Admin portal"]
+  end
+
+  subgraph runtime["OpenRevenue runtime"]
+    api["Go API"]
+    worker["Background workers"]
+    scheduler["Scheduler"]
+    modules["Domain modules<br/>registration, filing, assessment,<br/>payments, ledger, audit, and reporting"]
+    country["Versioned country packs"]
+    outbox["Transactional outbox"]
+  end
+
+  subgraph data["Data services"]
+    postgres[("PostgreSQL<br/>system of record")]
+    redis[("Redis<br/>non-authoritative cache")]
+    objects[("Object storage<br/>documents and exports")]
+  end
+
+  observability["Logs, metrics, and traces"]
+
+  users --> gateway
+  gateway --> clients
+  clients --> api
+  gateway <--> identity
+  api --> modules
+  worker --> modules
+  scheduler --> modules
+  country --> modules
+  modules --> postgres
+  modules --> outbox
+  outbox --> worker
+  modules --> redis
+  modules --> objects
+  api --> observability
+  worker --> observability
+  scheduler --> observability
+```
+
+Every application boundary requires tenant, jurisdiction, actor, and correlation
+context. Each module owns its PostgreSQL schema and communicates through
+application ports or versioned events—never by querying another module's
+tables. Business state, immutable audit facts, and outbox records commit in one
+transaction; workers process side effects idempotently.
+
 See [architecture overview](docs/architecture/overview.md), [domain boundaries](docs/architecture/domain-boundaries.md), the [foundational domain model](docs/architecture/foundational-domain-model.md), [country packs](docs/architecture/country-pack-architecture.md), and [security architecture](docs/architecture/security-architecture.md).
 
 ## Quick start
