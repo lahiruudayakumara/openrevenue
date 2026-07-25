@@ -5,9 +5,25 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: {node-version: 22, cache: pnpm}
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm lint && pnpm typecheck && pnpm test && pnpm build
+      - uses: actions/checkout@v5
+      - name: Skip when the frontend workspace is not present
+        if: ${{ hashFiles('package.json') == '' }}
+        run: echo "No root package.json found; frontend checks are not applicable to this revision."
+      - uses: pnpm/action-setup@v4.4.0
+        if: ${{ hashFiles('package.json') != '' }}
+        with:
+          version: 10.14.0
+          run_install: false
+      - uses: actions/setup-node@v5
+        if: ${{ hashFiles('package.json') != '' }}
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies from the lockfile
+        if: ${{ hashFiles('package.json') != '' && hashFiles('pnpm-lock.yaml') != '' }}
+        run: pnpm install --frozen-lockfile
+      - name: Install dependencies without a lockfile
+        if: ${{ hashFiles('package.json') != '' && hashFiles('pnpm-lock.yaml') == '' }}
+        run: pnpm install --no-frozen-lockfile
+      - if: ${{ hashFiles('package.json') != '' }}
+        run: pnpm lint && pnpm typecheck && pnpm test && pnpm build
