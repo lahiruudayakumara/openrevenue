@@ -5,7 +5,16 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      - name: Skip when no contracts are present
+        if: >-
+          hashFiles('contracts/openapi/*.yaml', 'contracts/events/*.json') == ''
+        run: echo "No API contracts found; contract checks are not applicable to this revision."
       - uses: stoplightio/spectral-action@latest
-        with: {file_glob: contracts/openapi/*.yaml}
-      - run: jq empty contracts/events/*.json
+        if: ${{ hashFiles('contracts/openapi/*.yaml') != '' }}
+        with:
+          file_glob: contracts/openapi/*.yaml
+          spectral_ruleset: .spectral.yaml
+      - name: Validate event contract JSON
+        if: ${{ hashFiles('contracts/events/*.json') != '' }}
+        run: jq empty contracts/events/*.json
