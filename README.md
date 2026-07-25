@@ -25,16 +25,22 @@ See [architecture overview](docs/architecture/overview.md), [domain boundaries](
 
 ## Quick start
 
-Requirements: Go 1.24+, Docker Compose, Node 22+, and pnpm 10+.
+Requirements are pinned in `.tool-versions`: Go 1.26.5, Node 22.23.1, pnpm
+10.14.0, and Docker with Compose v2.
 
 ```sh
-make setup
-make test
-make docker-up
+make bootstrap
+make services-up
+make quality
 make api
 ```
 
-The API listens on `http://localhost:8080`; Mailpit is at `http://localhost:8025`. API routes require an `Authorization` header, and create-taxpayer requires `Idempotency-Key`. Run `make help` for commands.
+The API listens on `http://localhost:8080`; Mailpit is at
+`http://localhost:8025`. API routes require an `Authorization` header, and
+create-taxpayer requires `Idempotency-Key`. See the
+[complete developer setup](docs/development/getting-started.md), run
+`make doctor` for actionable prerequisite diagnostics, and run `make help` for
+all commands.
 
 ## Repository map
 
