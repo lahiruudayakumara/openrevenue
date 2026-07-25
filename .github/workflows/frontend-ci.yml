@@ -26,6 +26,7 @@ jobs:
         if: ${{ hashFiles('package.json') != '' && hashFiles('pnpm-lock.yaml') == '' }}
         with:
           node-version: 22.23.1
+          node-version: 22
           package-manager-cache: false
       - name: Install dependencies from the lockfile
         if: ${{ hashFiles('package.json') != '' && hashFiles('pnpm-lock.yaml') != '' }}
