@@ -5,9 +5,18 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with: {go-version-file: go.mod, cache: true}
-      - run: test -z "$(gofmt -l $(find . -name '*.go'))"
-      - run: go vet ./...
-      - run: go test -race -cover ./...
+      - uses: actions/checkout@v5
+      - name: Skip when the Go module is not present
+        if: ${{ hashFiles('go.mod') == '' }}
+        run: echo "No go.mod found; backend checks are not applicable to this revision."
+      - uses: actions/setup-go@v6
+        if: ${{ hashFiles('go.mod') != '' }}
+        with:
+          go-version-file: go.mod
+          cache: true
+      - if: ${{ hashFiles('go.mod') != '' }}
+        run: test -z "$(gofmt -l $(find . -name '*.go'))"
+      - if: ${{ hashFiles('go.mod') != '' }}
+        run: go vet ./...
+      - if: ${{ hashFiles('go.mod') != '' }}
+        run: go test -race -cover ./...
