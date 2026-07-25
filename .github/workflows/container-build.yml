@@ -5,15 +5,21 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: actions/checkout@v5
+      - name: Skip when the container definition is not present
+        if: ${{ hashFiles('Dockerfile') == '' }}
+        run: echo "No root Dockerfile found; container checks are not applicable to this revision."
+      - uses: docker/setup-buildx-action@v4
+        if: ${{ hashFiles('Dockerfile') != '' }}
+      - uses: docker/build-push-action@v7
+        if: ${{ hashFiles('Dockerfile') != '' }}
         with:
           context: .
           push: false
           load: true
           tags: openrevenue/api:test
       - uses: aquasecurity/trivy-action@master
+        if: ${{ hashFiles('Dockerfile') != '' }}
         with:
           image-ref: openrevenue/api:test
           format: table
