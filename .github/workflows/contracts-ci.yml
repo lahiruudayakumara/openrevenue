@@ -1,21 +1,34 @@
 name: Contracts CI
-on: [pull_request, push]
-permissions: {contents: read}
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contracts-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  validate:
+  contracts:
     if: ${{ github.repository == 'opencorex-org/openrevenue' }}
+    name: Contract validation
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
-      - name: Skip when no contracts are present
-        if: >-
-          hashFiles('contracts/openapi/*.yaml', 'contracts/events/*.json') == ''
-        run: echo "No API contracts found; contract checks are not applicable to this revision."
-      - uses: stoplightio/spectral-action@latest
-        if: ${{ hashFiles('contracts/openapi/*.yaml') != '' }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
-          file_glob: contracts/openapi/*.yaml
-          spectral_ruleset: .spectral.yaml
-      - name: Validate event contract JSON
-        if: ${{ hashFiles('contracts/events/*.json') != '' }}
-        run: jq empty contracts/events/*.json
+          version: 10.14.0
+          run_install: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - name: Install exact contract tooling
+        run: pnpm install --frozen-lockfile
+      - name: Validate OpenAPI and event JSON Schemas
+        run: make contracts

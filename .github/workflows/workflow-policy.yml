@@ -1,4 +1,4 @@
-name: Backend CI
+name: Workflow policy
 
 on:
   pull_request:
@@ -9,22 +9,20 @@ permissions:
   contents: read
 
 concurrency:
-  group: backend-${{ github.event.pull_request.number || github.ref }}
+  group: workflow-policy-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  backend:
+  workflow-policy:
     if: ${{ github.repository == 'opencorex-org/openrevenue' }}
-    name: Backend quality
+    name: Workflow security policy
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
-      - name: Verify formatting, static analysis, and race-enabled tests
-        run: make go-format-check go-lint go-test
-      - name: Build backend commands
-        run: go build ./...
+      - name: Validate workflow syntax and policy
+        run: make workflow-policy

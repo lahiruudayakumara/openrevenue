@@ -1,21 +1,132 @@
 name: Release
-on: {push: {tags: ['v*']}}
-permissions: {contents: write, packages: write, id-token: write}
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  release:
+  validate:
     if: ${{ github.repository == 'opencorex-org/openrevenue' }}
+    name: Validate release source
     runs-on: ubuntu-latest
-    environment: production
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-      - name: Skip backend build when the Go module is not present
-        if: ${{ hashFiles('go.mod') == '' }}
-        run: echo "No go.mod found; backend release build is not applicable to this revision."
-      - uses: actions/setup-go@v6
-        if: ${{ hashFiles('go.mod') != '' }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          go-version: 1.26.5
-      - if: ${{ hashFiles('go.mod') != '' }}
-        run: go test ./... && go build ./...
-      - uses: softprops/action-gh-release@v2
-        with: {generate_release_notes: true}
+          fetch-depth: 0
+      - name: Verify trusted SemVer tag and main-branch ancestry
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          printf '%s\n' "${RELEASE_TAG}" |
+            grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "${GITHUB_SHA}" origin/main
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run backend release gates
+        run: make go-format-check go-lint go-test
+
+  build:
+    if: ${{ github.repository == 'opencorex-org/openrevenue' }}
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goos: linux, goarch: amd64, extension: ''}
+          - {goos: linux, goarch: arm64, extension: ''}
+          - {goos: darwin, goarch: amd64, extension: ''}
+          - {goos: darwin, goarch: arm64, extension: ''}
+          - {goos: windows, goarch: amd64, extension: '.exe'}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build reproducible command binaries
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -eu
+          mkdir -p dist
+          for command in api worker scheduler; do
+            output="dist/openrevenue-${command}-${GOOS}-${GOARCH}${{ matrix.extension }}"
+            go build -trimpath -buildvcs=true \
+              -ldflags="-s -w -buildid=" \
+              -o "${output}" "./apps/${command}/cmd/${command}"
+          done
+      - name: Upload platform binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: ${{ github.repository == 'opencorex-org/openrevenue' }}
+    name: Attest and publish release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Download all platform binaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: binaries-*
+          path: dist
+          merge-multiple: true
+      - name: Generate release SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/openrevenue-source.spdx.json
+          upload-artifact: false
+      - name: Record release metadata and checksums
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          set -eu
+          {
+            printf 'tag=%s\n' "${RELEASE_TAG}"
+            printf 'commit=%s\n' "${RELEASE_COMMIT}"
+            printf 'repository=%s\n' "${GITHUB_REPOSITORY}"
+            printf 'run=%s/actions/runs/%s\n' "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}"
+          } > dist/BUILD-METADATA.txt
+          cd dist
+          sha256sum ./* > SHA256SUMS
+      - name: Generate build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: dist/*
+      - name: Publish immutable GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

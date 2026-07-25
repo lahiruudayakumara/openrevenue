@@ -1,25 +1,74 @@
 openapi: 3.1.0
-info: {title: OpenRevenue API, version: 0.1.0, description: Configurable revenue administration API}
+info:
+  title: OpenRevenue API
+  version: 0.1.0
+  description: Configurable revenue administration API
+  contact:
+    name: OpenRevenue maintainers
+    url: https://github.com/opencorex-org/openrevenue
 servers: [{url: /api/v1}]
+tags:
+  - {name: Taxpayers, description: Taxpayer identity and registration}
+  - {name: Returns, description: Tax return lifecycle}
+  - {name: Payments, description: Revenue payment processing}
+  - {name: Ledger, description: Append-only taxpayer ledger}
+  - {name: Audit, description: Administrative audit events}
 paths:
   /taxpayers:
     post:
       operationId: createTaxpayer
+      description: Create a taxpayer record.
+      tags: [Taxpayers]
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateTaxpayer'}}}}
       responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Taxpayer'}}}}, default: {$ref: '#/components/responses/Problem'}}
   /taxpayers/{taxpayerId}/tax-registrations:
     post:
       operationId: registerTaxpayer
+      description: Submit a tax registration for a taxpayer.
+      tags: [Taxpayers]
       parameters: [{name: taxpayerId, in: path, required: true, schema: {type: string, format: uuid}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [taxType], properties: {taxType: {type: string}}}}}}
       responses: {'201': {description: Registered}, default: {$ref: '#/components/responses/Problem'}}
-  /returns: {post: {operationId: createReturnDraft, responses: {'201': {description: Draft created}, default: {$ref: '#/components/responses/Problem'}}}}
-  /returns/{returnId}/validate: {post: {operationId: validateReturn, parameters: [{$ref: '#/components/parameters/ReturnId'}], responses: {'200': {description: Validated}, default: {$ref: '#/components/responses/Problem'}}}}
-  /returns/{returnId}/submit: {post: {operationId: submitReturn, parameters: [{$ref: '#/components/parameters/ReturnId'}], responses: {'201': {description: Submitted and assessed}, default: {$ref: '#/components/responses/Problem'}}}}
-  /payments: {post: {operationId: recordPayment, responses: {'201': {description: Recorded and allocated}, default: {$ref: '#/components/responses/Problem'}}}}
-  /taxpayers/{taxpayerId}/ledger: {get: {operationId: getLedger, parameters: [{name: taxpayerId, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: Append-only ledger}, default: {$ref: '#/components/responses/Problem'}}}}
-  /admin/audit-events: {get: {operationId: listAuditEvents, responses: {'200': {description: Immutable audit events}, default: {$ref: '#/components/responses/Problem'}}}}
+  /returns:
+    post:
+      operationId: createReturnDraft
+      description: Create a draft tax return.
+      tags: [Returns]
+      responses: {'201': {description: Draft created}, default: {$ref: '#/components/responses/Problem'}}
+  /returns/{returnId}/validate:
+    post:
+      operationId: validateReturn
+      description: Validate a draft return without submitting it.
+      tags: [Returns]
+      parameters: [{$ref: '#/components/parameters/ReturnId'}]
+      responses: {'200': {description: Validated}, default: {$ref: '#/components/responses/Problem'}}
+  /returns/{returnId}/submit:
+    post:
+      operationId: submitReturn
+      description: Submit a validated return for assessment.
+      tags: [Returns]
+      parameters: [{$ref: '#/components/parameters/ReturnId'}]
+      responses: {'201': {description: Submitted and assessed}, default: {$ref: '#/components/responses/Problem'}}
+  /payments:
+    post:
+      operationId: recordPayment
+      description: Record and allocate a revenue payment.
+      tags: [Payments]
+      responses: {'201': {description: Recorded and allocated}, default: {$ref: '#/components/responses/Problem'}}
+  /taxpayers/{taxpayerId}/ledger:
+    get:
+      operationId: getLedger
+      description: Retrieve the taxpayer's append-only ledger.
+      tags: [Ledger]
+      parameters: [{name: taxpayerId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Append-only ledger}, default: {$ref: '#/components/responses/Problem'}}
+  /admin/audit-events:
+    get:
+      operationId: listAuditEvents
+      description: List immutable administrative audit events.
+      tags: [Audit]
+      responses: {'200': {description: Immutable audit events}, default: {$ref: '#/components/responses/Problem'}}
 components:
   parameters:
     IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, maxLength: 128}}
