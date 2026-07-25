@@ -2,9 +2,9 @@ package domain
 
 import (
 	"errors"
-	"fmt"
 	"time"
 
+	foundation "github.com/opencorex-org/openrevenue/pkg/domain"
 	"github.com/opencorex-org/openrevenue/pkg/id"
 )
 
@@ -18,24 +18,7 @@ type RegistrationID = id.ID[RegistrationTag]
 type PeriodID = id.ID[PeriodTag]
 type EntryID = id.ID[EntryTag]
 
-// Money stores minor currency units. Floating point values are never used.
-type Money struct {
-	Minor    int64  `json:"minor"`
-	Currency string `json:"currency"`
-}
-
-func (m Money) Validate() error {
-	if m.Minor < 0 {
-		return errors.New("amount cannot be negative")
-	}
-	if len(m.Currency) != 3 {
-		return errors.New("currency must be ISO 4217")
-	}
-	return nil
-}
-func (m Money) String() string {
-	return fmt.Sprintf("%s %d.%02d", m.Currency, m.Minor/100, m.Minor%100)
-}
+type Money = foundation.Money
 
 type EntryType string
 
@@ -52,6 +35,8 @@ const (
 
 type Entry struct {
 	ID                EntryID           `json:"id"`
+	TenantID          string            `json:"tenantId"`
+	Jurisdiction      string            `json:"jurisdiction"`
 	TaxpayerID        TaxpayerID        `json:"taxpayerId"`
 	TaxRegistrationID RegistrationID    `json:"taxRegistrationId"`
 	TaxPeriodID       PeriodID          `json:"taxPeriodId"`
@@ -67,25 +52,70 @@ type Entry struct {
 	Metadata          map[string]string `json:"metadata,omitempty"`
 }
 
-func NewEntry(t EntryType, taxpayer TaxpayerID, registration RegistrationID, period PeriodID, amount Money, refType, refID, actor string, now time.Time) (Entry, error) {
+func NewEntry(
+	scope foundation.Context,
+	t EntryType,
+	taxpayer TaxpayerID,
+	registration RegistrationID,
+	period PeriodID,
+	amount Money,
+	refType string,
+	refID string,
+	now time.Time,
+) (Entry, error) {
+	if err := scope.Validate(); err != nil {
+		return Entry{}, err
+	}
 	if err := amount.Validate(); err != nil {
 		return Entry{}, err
 	}
-	if amount.Minor == 0 {
+	if amount.Minor() <= 0 {
 		return Entry{}, errors.New("ledger amount must be positive")
 	}
-	e := Entry{ID: id.New[EntryTag](), TaxpayerID: taxpayer, TaxRegistrationID: registration, TaxPeriodID: period, Type: t, ReferenceType: refType, ReferenceID: refID, EffectiveDate: now, PostedAt: now, CreatedBy: actor}
+	if now.IsZero() {
+		return Entry{}, errors.New("posting time is required")
+	}
+	zero, err := foundation.NewMoney(0, amount.Currency())
+	if err != nil {
+		return Entry{}, err
+	}
+	now = now.UTC()
+	e := Entry{
+		ID: id.New[EntryTag](), TenantID: scope.Tenant().String(),
+		Jurisdiction: scope.Jurisdiction().String(), TaxpayerID: taxpayer,
+		TaxRegistrationID: registration, TaxPeriodID: period, Type: t,
+		ReferenceType: refType, ReferenceID: refID, EffectiveDate: now,
+		PostedAt: now, CreatedBy: scope.Actor().ID(),
+	}
 	if t == PaymentCredit || t == AdjustmentCredit {
 		e.Credit = amount
-		e.Debit = Money{Currency: amount.Currency}
+		e.Debit = zero
 	} else {
 		e.Debit = amount
-		e.Credit = Money{Currency: amount.Currency}
+		e.Credit = zero
 	}
 	return e, nil
 }
 
-func NewReversal(original Entry, actor string, now time.Time) Entry {
-	r := Entry{ID: id.New[EntryTag](), TaxpayerID: original.TaxpayerID, TaxRegistrationID: original.TaxRegistrationID, TaxPeriodID: original.TaxPeriodID, Type: Reversal, Debit: original.Credit, Credit: original.Debit, ReferenceType: "LEDGER_ENTRY", ReferenceID: original.ID.String(), EffectiveDate: now, PostedAt: now, CreatedBy: actor, ReversalOf: &original.ID}
-	return r
+func NewReversal(scope foundation.Context, original Entry, now time.Time) (Entry, error) {
+	if err := scope.Validate(); err != nil {
+		return Entry{}, err
+	}
+	if original.TenantID != scope.Tenant().String() ||
+		original.Jurisdiction != scope.Jurisdiction().String() {
+		return Entry{}, errors.New("ledger entry is outside the requested tenant and jurisdiction")
+	}
+	if now.IsZero() {
+		return Entry{}, errors.New("reversal time is required")
+	}
+	now = now.UTC()
+	return Entry{
+		ID: id.New[EntryTag](), TenantID: original.TenantID,
+		Jurisdiction: original.Jurisdiction, TaxpayerID: original.TaxpayerID,
+		TaxRegistrationID: original.TaxRegistrationID, TaxPeriodID: original.TaxPeriodID,
+		Type: Reversal, Debit: original.Credit, Credit: original.Debit,
+		ReferenceType: "LEDGER_ENTRY", ReferenceID: original.ID.String(),
+		EffectiveDate: now, PostedAt: now, CreatedBy: scope.Actor().ID(),
+		ReversalOf: &original.ID,
+	}, nil
 }

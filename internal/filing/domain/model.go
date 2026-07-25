@@ -2,8 +2,10 @@ package domain
 
 import (
 	"errors"
-	"github.com/opencorex-org/openrevenue/pkg/id"
 	"time"
+
+	foundation "github.com/opencorex-org/openrevenue/pkg/domain"
+	"github.com/opencorex-org/openrevenue/pkg/id"
 )
 
 type ReturnTag struct{}
@@ -22,6 +24,8 @@ type Line struct {
 }
 type TaxReturn struct {
 	ID             TaxReturnID `json:"id"`
+	TenantID       string      `json:"tenantId"`
+	Jurisdiction   string      `json:"jurisdiction"`
 	TaxpayerID     string      `json:"taxpayerId"`
 	RegistrationID string      `json:"registrationId"`
 	PeriodID       string      `json:"periodId"`
@@ -32,8 +36,20 @@ type TaxReturn struct {
 	SubmittedAt    *time.Time  `json:"submittedAt,omitempty"`
 }
 
-func New(taxpayer, registration, period string, lines []Line) TaxReturn {
-	return TaxReturn{ID: id.New[ReturnTag](), TaxpayerID: taxpayer, RegistrationID: registration, PeriodID: period, FormVersion: "sample-income-v1", RuleVersion: "fictional-flat-rate-v1", Lines: lines, Status: Draft}
+func New(scope foundation.Context, taxpayer, registration, period string, lines []Line) (TaxReturn, error) {
+	if err := scope.Validate(); err != nil {
+		return TaxReturn{}, err
+	}
+	if taxpayer == "" || registration == "" || period == "" {
+		return TaxReturn{}, errors.New("taxpayer, registration, and period are required")
+	}
+	return TaxReturn{
+		ID: id.New[ReturnTag](), TenantID: scope.Tenant().String(),
+		Jurisdiction: scope.Jurisdiction().String(), TaxpayerID: taxpayer,
+		RegistrationID: registration, PeriodID: period,
+		FormVersion: "sample-income-v1", RuleVersion: "fictional-flat-rate-v1",
+		Lines: lines, Status: Draft,
+	}, nil
 }
 func (r *TaxReturn) Validate() error {
 	if r.Status != Draft {
@@ -54,6 +70,10 @@ func (r *TaxReturn) Submit(now time.Time) error {
 	if r.Status != Validated {
 		return errors.New("return must be validated")
 	}
+	if now.IsZero() {
+		return errors.New("submission time is required")
+	}
+	now = now.UTC()
 	r.Status = Submitted
 	r.SubmittedAt = &now
 	return nil
