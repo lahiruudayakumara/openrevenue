@@ -3367,6 +3367,7 @@ snapshots:
       possible-typed-array-names: 1.1.0
       reflect.getprototypeof: 1.0.10
 
+
   typescript@5.9.3: {}
 
   typescript@7.0.2:
