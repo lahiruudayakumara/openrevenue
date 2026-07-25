@@ -15,11 +15,18 @@ jobs:
         with:
           version: 10.14.0
           run_install: false
-      - uses: actions/setup-node@v5
-        if: ${{ hashFiles('package.json') != '' }}
+      - name: Set up Node.js with pnpm cache
+        uses: actions/setup-node@v6
+        if: ${{ hashFiles('package.json') != '' && hashFiles('pnpm-lock.yaml') != '' }}
         with:
           node-version: 22
           cache: pnpm
+      - name: Set up Node.js without dependency cache
+        uses: actions/setup-node@v6
+        if: ${{ hashFiles('package.json') != '' && hashFiles('pnpm-lock.yaml') == '' }}
+        with:
+          node-version: 22
+          package-manager-cache: false
       - name: Install dependencies from the lockfile
         if: ${{ hashFiles('package.json') != '' && hashFiles('pnpm-lock.yaml') != '' }}
         run: pnpm install --frozen-lockfile

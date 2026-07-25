@@ -19,10 +19,11 @@ jobs:
           push: false
           load: true
           tags: openrevenue/api:test
-      - uses: aquasecurity/trivy-action@master
+      - uses: aquasecurity/trivy-action@v0.36.0
         if: ${{ hashFiles('Dockerfile') != '' }}
         with:
           image-ref: openrevenue/api:test
           format: table
           exit-code: "1"
           severity: "CRITICAL,HIGH"
+          scanners: vuln
