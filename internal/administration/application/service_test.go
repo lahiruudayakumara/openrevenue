@@ -78,6 +78,9 @@ func TestVerticalSliceUsesCanonicalContextMoneyAndClock(t *testing.T) {
 	if _, err = s.ValidateReturn(taxpayerActor, taxReturn.ID.String()); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = s.CalculateReturn(taxpayerActor, taxReturn.ID.String()); err != nil {
+		t.Fatal(err)
+	}
 	assessment, err := s.SubmitAndAssess(context.Background(), taxpayerActor, taxReturn.ID.String())
 	if err != nil {
 		t.Fatal(err)
@@ -160,6 +163,7 @@ func TestPaymentRejectsCurrencyMixing(t *testing.T) {
 		[]filing.Line{{Code: "GROSS", AmountMinor: 100_00}},
 	)
 	_, _ = s.ValidateReturn(requestScope, taxReturn.ID.String())
+	_, _ = s.CalculateReturn(requestScope, taxReturn.ID.String())
 	assessment, _ := s.SubmitAndAssess(context.Background(), requestScope, taxReturn.ID.String())
 	usd, _ := foundation.NewCurrency("USD", 2)
 	amount, _ := foundation.NewMoney(assessment.Amount.Minor(), usd)

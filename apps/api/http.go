@@ -23,6 +23,12 @@ var (
 	taxRegistrationSubmitSuccesses  atomic.Uint64
 	taxRegistrationApproveSuccesses atomic.Uint64
 	verticalSliceFailures           atomic.Uint64
+	returnDraftSuccesses            atomic.Uint64
+	returnValidationSuccesses       atomic.Uint64
+	returnCalculationSuccesses      atomic.Uint64
+	returnSubmissionSuccesses       atomic.Uint64
+	returnAmendmentSuccesses        atomic.Uint64
+	returnLifecycleFailures         atomic.Uint64
 )
 
 func Router(s *app.Service) http.Handler {
@@ -55,12 +61,28 @@ func Router(s *app.Service) http.Handler {
 				"openrevenue_tax_registration_approve_success_total %d\n"+
 				"# HELP openrevenue_registration_vertical_slice_failures_total Safe taxpayer and registration request failures.\n"+
 				"# TYPE openrevenue_registration_vertical_slice_failures_total counter\n"+
-				"openrevenue_registration_vertical_slice_failures_total %d\n",
+				"openrevenue_registration_vertical_slice_failures_total %d\n"+
+				"# HELP openrevenue_return_lifecycle_success_total Successful return lifecycle operations.\n"+
+				"# TYPE openrevenue_return_lifecycle_success_total counter\n"+
+				"openrevenue_return_lifecycle_success_total{operation=\"draft\"} %d\n"+
+				"openrevenue_return_lifecycle_success_total{operation=\"validate\"} %d\n"+
+				"openrevenue_return_lifecycle_success_total{operation=\"calculate\"} %d\n"+
+				"openrevenue_return_lifecycle_success_total{operation=\"submit\"} %d\n"+
+				"openrevenue_return_lifecycle_success_total{operation=\"amend\"} %d\n"+
+				"# HELP openrevenue_return_lifecycle_failures_total Safe return lifecycle request failures.\n"+
+				"# TYPE openrevenue_return_lifecycle_failures_total counter\n"+
+				"openrevenue_return_lifecycle_failures_total %d\n",
 			mw.RejectedDomainContexts(),
 			taxpayerCreateSuccesses.Load(),
 			taxRegistrationSubmitSuccesses.Load(),
 			taxRegistrationApproveSuccesses.Load(),
 			verticalSliceFailures.Load(),
+			returnDraftSuccesses.Load(),
+			returnValidationSuccesses.Load(),
+			returnCalculationSuccesses.Load(),
+			returnSubmissionSuccesses.Load(),
+			returnAmendmentSuccesses.Load(),
+			returnLifecycleFailures.Load(),
 		)
 	})
 	r.Group(func(r chi.Router) {
@@ -72,8 +94,12 @@ func Router(s *app.Service) http.Handler {
 			r.Get("/tax-registrations/{registrationID}", h.getRegistration)
 			r.Post("/tax-registrations/{registrationID}/approve", h.approveRegistration)
 			r.Post("/returns", h.draft)
+			r.Get("/returns/{returnID}", h.getReturn)
 			r.Post("/returns/{returnID}/validate", h.validate)
+			r.Post("/returns/{returnID}/calculate", h.calculate)
 			r.Post("/returns/{returnID}/submit", h.submit)
+			r.Post("/returns/{returnID}/amend", h.amend)
+			r.Get("/returns/{returnID}/history", h.returnHistory)
 			r.Post("/payments", h.payment)
 			r.Get("/taxpayers/{taxpayerID}/ledger", h.ledger)
 			r.Get("/admin/audit-events", h.audits)
@@ -188,33 +214,92 @@ func (h *Handler) draft(w http.ResponseWriter, r *http.Request) {
 		TaxpayerID     string        `json:"taxpayerId"`
 		RegistrationID string        `json:"registrationId"`
 		PeriodID       string        `json:"periodId"`
+		FormVersion    string        `json:"formVersion"`
+		RuleVersion    string        `json:"ruleVersion"`
 		Lines          []filing.Line `json:"lines"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
-	v, err := h.s.DraftReturn(requestContext(r), in.TaxpayerID, in.RegistrationID, in.PeriodID, in.Lines)
+	if in.FormVersion == "" {
+		in.FormVersion = filing.DefaultFormVersion
+	}
+	if in.RuleVersion == "" {
+		in.RuleVersion = filing.DefaultRuleVersion
+	}
+	v, err := h.s.DraftReturnVersioned(
+		requestContext(r), in.TaxpayerID, in.RegistrationID, in.PeriodID,
+		in.FormVersion, in.RuleVersion, in.Lines,
+	)
 	if err != nil {
-		problem.Write(w, r, 422, "Draft failed", err)
+		returnLifecycleFailures.Add(1)
+		writeApplicationError(w, r, "Draft failed", err)
 		return
 	}
+	returnDraftSuccesses.Add(1)
 	write(w, 201, v)
 }
+
+func (h *Handler) getReturn(w http.ResponseWriter, r *http.Request) {
+	v, err := h.s.GetReturn(requestContext(r), chi.URLParam(r, "returnID"))
+	if err != nil {
+		writeApplicationError(w, r, "Return query failed", err)
+		return
+	}
+	write(w, http.StatusOK, v)
+}
+
 func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
 	v, err := h.s.ValidateReturn(requestContext(r), chi.URLParam(r, "returnID"))
 	if err != nil {
-		problem.Write(w, r, 422, "Validation failed", err)
+		returnLifecycleFailures.Add(1)
+		writeApplicationError(w, r, "Validation failed", err)
 		return
 	}
+	returnValidationSuccesses.Add(1)
 	write(w, 200, v)
 }
+
+func (h *Handler) calculate(w http.ResponseWriter, r *http.Request) {
+	v, err := h.s.CalculateReturn(requestContext(r), chi.URLParam(r, "returnID"))
+	if err != nil {
+		returnLifecycleFailures.Add(1)
+		writeApplicationError(w, r, "Calculation failed", err)
+		return
+	}
+	returnCalculationSuccesses.Add(1)
+	write(w, http.StatusOK, v)
+}
+
 func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	v, err := h.s.SubmitAndAssess(r.Context(), requestContext(r), chi.URLParam(r, "returnID"))
 	if err != nil {
-		problem.Write(w, r, 422, "Submission failed", err)
+		returnLifecycleFailures.Add(1)
+		writeApplicationError(w, r, "Submission failed", err)
 		return
 	}
+	returnSubmissionSuccesses.Add(1)
 	write(w, 201, v)
+}
+
+func (h *Handler) amend(w http.ResponseWriter, r *http.Request) {
+	v, err := h.s.AmendReturn(requestContext(r), chi.URLParam(r, "returnID"))
+	if err != nil {
+		returnLifecycleFailures.Add(1)
+		writeApplicationError(w, r, "Amendment failed", err)
+		return
+	}
+	returnAmendmentSuccesses.Add(1)
+	write(w, http.StatusCreated, v)
+}
+
+func (h *Handler) returnHistory(w http.ResponseWriter, r *http.Request) {
+	values, err := h.s.ReturnHistory(requestContext(r), chi.URLParam(r, "returnID"))
+	if err != nil {
+		writeApplicationError(w, r, "Return history query failed", err)
+		return
+	}
+	write(w, http.StatusOK, map[string]any{"returns": values})
 }
 func (h *Handler) payment(w http.ResponseWriter, r *http.Request) {
 	var in struct {
