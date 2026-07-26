@@ -697,6 +697,11 @@ components:
       type: object
       required: [taxpayerId, amountMinor, currency]
       additionalProperties: false
+      example:
+        taxpayerId: 4c7c409b-a8b2-423e-b70b-5a31a23fcdb6
+        assessmentId: 2c033fef-981d-4d2b-a72f-a41c1df39f62
+        amountMinor: 12500
+        currency: LKR
       properties:
         taxpayerId: { type: string, format: uuid }
         assessmentId: { type: string, format: uuid }
@@ -856,6 +861,14 @@ components:
             status: { type: integer },
             detail: { type: string },
             instance: { type: string },
+          },
+        example:
+          {
+            type: "about:blank",
+            title: "Invalid request",
+            status: 400,
+            detail: "The request body did not satisfy the contract.",
+            instance: "/api/v1/payments",
           },
       }
   responses:

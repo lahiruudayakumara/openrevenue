@@ -8,3 +8,20 @@ from trusted claims in production rather than accepting arbitrary browser
 values. `X-Actor-Type` defaults to `USER`. `X-Correlation-ID` may be supplied or
 is generated at ingress. Middleware validates the complete canonical context
 before calling an application service.
+
+## Contract governance
+
+`contracts/openapi/openapi.yaml` is the canonical HTTP contract. Every
+implemented `/api/v1` route needs a unique camel-case `operationId`, documented
+success and RFC 9457 `application/problem+json` error responses, and examples
+that contain fictional data only. Run `make contracts` after changing a route.
+
+CI compares pull-request contracts with the base commit. Removing an operation,
+schema, or property, or making an existing property required, fails the
+compatibility gate. Intentional breaking changes require a new versioned API
+surface and a recorded migration decision; the check must not be bypassed.
+
+The TypeScript smoke client is committed at
+`clients/typescript/openapi-client.ts`. Regenerate it with `make generate`.
+Contract validation fails when generated output differs, ensuring generation is
+reproducible.

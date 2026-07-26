@@ -1,0 +1,23 @@
+{
+  "eventId": "a2d03a9e-a6ba-49f5-bf56-1861c4be0ef7",
+  "eventType": "PaymentAllocated",
+  "eventVersion": 1,
+  "occurredAt": "2026-07-26T08:30:00Z",
+  "correlationId": "request-01K123456789ABCDEFGHJKMNPQ",
+  "causationId": "command-01K123456789ABCDEFGHJKMNPQ",
+  "actor": {
+    "kind": "USER",
+    "id": "revenue-officer-42"
+  },
+  "tenant": "demo-revenue-authority",
+  "jurisdiction": "LK",
+  "data": {
+    "paymentId": "6208db33-e8df-4829-8480-48b22d7bb9e2",
+    "assessmentId": "7e4b68f5-17ca-48a7-9c03-36281584ad13",
+    "amountMinor": 12500,
+    "currency": "LKR"
+  },
+  "metadata": {
+    "producer": "openrevenue-api"
+  }
+}

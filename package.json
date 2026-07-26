@@ -12,7 +12,9 @@
         "lint": "turbo run lint",
         "typecheck": "turbo run typecheck",
         "test": "turbo run test",
-        "contracts": "redocly lint contracts/openapi/*.yaml --extends recommended && node scripts/ci/validate-event-schemas.mjs",
+        "contracts": "redocly lint contracts/openapi/*.yaml --extends recommended && redocly bundle contracts/openapi/openapi.yaml --output .contract-openapi.json && node scripts/ci/validate-openapi.mjs .contract-openapi.json && node scripts/ci/validate-event-schemas.mjs && node scripts/ci/generate-openapi-client.mjs .contract-openapi.json --check && tsc --noEmit --strict --lib ES2022,DOM clients/typescript/openapi-client.ts",
+        "contracts:generate": "redocly bundle contracts/openapi/openapi.yaml --output .contract-openapi.json && node scripts/ci/generate-openapi-client.mjs .contract-openapi.json",
+        "contracts:compat": "node scripts/ci/check-openapi-compatibility.mjs",
         "format": "prettier --write \"apps/**/*.{ts,tsx}\" \"web/**/*.{ts,tsx}\"",
         "format:check": "prettier --check \"apps/**/*.{ts,tsx}\" \"web/**/*.{ts,tsx}\""
     },

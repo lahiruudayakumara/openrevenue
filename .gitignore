@@ -185,3 +185,4 @@ reports/
 # macOS/Linux debug artifacts
 core
 core.*
+.contract-openapi.json
