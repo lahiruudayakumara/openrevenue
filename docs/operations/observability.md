@@ -19,3 +19,10 @@ Operators should alert on a sustained increase in
 `openrevenue_registration_vertical_slice_failures_total` relative to successful
 submissions and approvals. Audit and integration events carry correlation and
 causation identifiers for trace linkage without exposing taxpayer data.
+
+Return lifecycle metrics report successful draft, validation, calculation,
+submission, and amendment operations using fixed low-cardinality operation
+labels. Alert on a sustained increase in
+`openrevenue_return_lifecycle_failures_total`. Calculation explanations and
+payload hashes may be retained with the return, but raw return lines and
+validation inputs must not be emitted to logs, traces, or metric labels.

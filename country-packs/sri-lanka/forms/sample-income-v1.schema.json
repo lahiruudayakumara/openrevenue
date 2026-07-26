@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openrevenue.org/country-packs/sri-lanka/forms/sample-income-v1.schema.json",
+  "title": "Fictional sample income return form v1",
+  "type": "object",
+  "required": ["GROSS"],
+  "properties": {
+    "GROSS": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Fictional gross amount in XCR minor units."
+    }
+  },
+  "additionalProperties": false,
+  "x-openrevenue": {
+    "formVersion": "sample-income-v1",
+    "ruleVersion": "fictional-flat-rate-v1",
+    "exampleOnly": true
+  }
+}

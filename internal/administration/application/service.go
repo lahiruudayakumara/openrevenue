@@ -11,6 +11,7 @@ import (
 	"time"
 
 	audit "github.com/opencorex-org/openrevenue/internal/audit/domain"
+	calculation "github.com/opencorex-org/openrevenue/internal/calculation/domain"
 	filing "github.com/opencorex-org/openrevenue/internal/filing/domain"
 	event "github.com/opencorex-org/openrevenue/internal/integration/domain"
 	ledger "github.com/opencorex-org/openrevenue/internal/ledger/domain"
@@ -84,6 +85,7 @@ type Service struct {
 	idempotency   map[string]idempotencyRecord
 	identifiers   map[string]string
 	authorizer    Authorizer
+	calculator    calculation.Calculator
 }
 
 func New(notifier Notifier) *Service {
@@ -107,7 +109,19 @@ func NewWithDependencies(notifier Notifier, clock foundation.Clock, authorizer A
 		assessments: map[string]Assessment{}, payments: map[string]Payment{},
 		idempotency: map[string]idempotencyRecord{}, identifiers: map[string]string{},
 		authorizer: authorizer,
+		calculator: calculation.FlatRateCalculator{
+			RuleVersion: filing.DefaultRuleVersion, RateBPS: 1_000,
+		},
 	}
+}
+
+func (s *Service) SetCalculator(calculator calculation.Calculator) {
+	if calculator == nil {
+		panic("calculator is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calculator = calculator
 }
 
 func (s *Service) record(scope foundation.Context, action, kind, resourceID string) error {
@@ -297,7 +311,25 @@ func (s *Service) DraftReturn(
 	periodID string,
 	lines []filing.Line,
 ) (filing.TaxReturn, error) {
+	return s.DraftReturnVersioned(
+		scope, taxpayerID, registrationID, periodID,
+		filing.DefaultFormVersion, filing.DefaultRuleVersion, lines,
+	)
+}
+
+func (s *Service) DraftReturnVersioned(
+	scope foundation.Context,
+	taxpayerID string,
+	registrationID string,
+	periodID string,
+	formVersion string,
+	ruleVersion string,
+	lines []filing.Line,
+) (filing.TaxReturn, error) {
 	if err := scope.Validate(); err != nil {
+		return filing.TaxReturn{}, err
+	}
+	if err := s.authorize(scope, "return:create", registrationID); err != nil {
 		return filing.TaxReturn{}, err
 	}
 	s.mu.Lock()
@@ -306,12 +338,19 @@ func (s *Service) DraftReturn(
 	if !ok || taxRegistration.TaxpayerID != taxpayerID || taxRegistration.Status != registration.StatusApproved {
 		return filing.TaxReturn{}, errors.New("registration not found")
 	}
-	taxReturn, err := filing.New(scope, taxpayerID, registrationID, periodID, lines)
+	taxReturn, err := filing.NewVersioned(
+		scope, taxpayerID, registrationID, periodID, formVersion, ruleVersion, lines,
+	)
 	if err != nil {
 		return filing.TaxReturn{}, err
 	}
 	s.returns[scope.IsolationKey(taxReturn.ID.String())] = taxReturn
 	if err := s.record(scope, "ReturnCreated", "return", taxReturn.ID.String()); err != nil {
+		return filing.TaxReturn{}, err
+	}
+	if err := s.emit(scope, "ReturnCreated", "return", taxReturn.ID.String(), map[string]string{
+		"formVersion": taxReturn.FormVersion, "ruleVersion": taxReturn.RuleVersion,
+	}); err != nil {
 		return filing.TaxReturn{}, err
 	}
 	return taxReturn, nil
@@ -321,6 +360,9 @@ func (s *Service) ValidateReturn(scope foundation.Context, returnID string) (fil
 	if err := scope.Validate(); err != nil {
 		return filing.TaxReturn{}, err
 	}
+	if err := s.authorize(scope, "return:validate", returnID); err != nil {
+		return filing.TaxReturn{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := scope.IsolationKey(returnID)
@@ -328,11 +370,65 @@ func (s *Service) ValidateReturn(scope foundation.Context, returnID string) (fil
 	if !ok {
 		return taxReturn, errors.New("return not found")
 	}
-	if err := taxReturn.Validate(); err != nil {
-		return taxReturn, err
+	result := taxReturn.ValidateAgainst(filing.DefaultForm())
+	if !result.Valid {
+		s.returns[key] = taxReturn
+		return taxReturn, nil
 	}
 	s.returns[key] = taxReturn
 	if err := s.record(scope, "ReturnValidated", "return", returnID); err != nil {
+		return filing.TaxReturn{}, err
+	}
+	if err := s.emit(scope, "ReturnValidated", "return", returnID, map[string]string{
+		"formVersion": taxReturn.FormVersion, "payloadHash": result.PayloadHash,
+	}); err != nil {
+		return filing.TaxReturn{}, err
+	}
+	return taxReturn, nil
+}
+
+func (s *Service) CalculateReturn(scope foundation.Context, returnID string) (filing.TaxReturn, error) {
+	if err := scope.Validate(); err != nil {
+		return filing.TaxReturn{}, err
+	}
+	if err := s.authorize(scope, "return:calculate", returnID); err != nil {
+		return filing.TaxReturn{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scope.IsolationKey(returnID)
+	taxReturn, ok := s.returns[key]
+	if !ok {
+		return filing.TaxReturn{}, ErrNotFound
+	}
+	if taxReturn.Validation == nil {
+		return filing.TaxReturn{}, fmt.Errorf("%w: return has not been validated", ErrInvalidTransition)
+	}
+	currency, err := foundation.NewCurrency("XCR", 2)
+	if err != nil {
+		return filing.TaxReturn{}, err
+	}
+	lines := make([]calculation.InputLine, len(taxReturn.Lines))
+	for index, line := range taxReturn.Lines {
+		lines[index] = calculation.InputLine{Code: line.Code, AmountMinor: line.AmountMinor}
+	}
+	result, err := s.calculator.Calculate(calculation.Input{
+		RuleVersion: taxReturn.RuleVersion, Currency: currency,
+		Lines: lines, InputHash: taxReturn.Validation.PayloadHash,
+	})
+	if err != nil {
+		return filing.TaxReturn{}, err
+	}
+	if err = taxReturn.RecordCalculation(result); err != nil {
+		return filing.TaxReturn{}, fmt.Errorf("%w: %v", ErrInvalidTransition, err)
+	}
+	s.returns[key] = taxReturn
+	if err := s.record(scope, "ReturnCalculated", "return", returnID); err != nil {
+		return filing.TaxReturn{}, err
+	}
+	if err := s.emit(scope, "ReturnCalculated", "return", returnID, map[string]string{
+		"ruleVersion": result.RuleVersion, "resultHash": result.ResultHash,
+	}); err != nil {
 		return filing.TaxReturn{}, err
 	}
 	return taxReturn, nil
@@ -346,6 +442,9 @@ func (s *Service) SubmitAndAssess(
 	if err := scope.Validate(); err != nil {
 		return Assessment{}, err
 	}
+	if err := s.authorize(scope, "return:submit", returnID); err != nil {
+		return Assessment{}, err
+	}
 	s.mu.Lock()
 	key := scope.IsolationKey(returnID)
 	taxReturn, ok := s.returns[key]
@@ -354,33 +453,11 @@ func (s *Service) SubmitAndAssess(
 		return Assessment{}, errors.New("return not found")
 	}
 	now := s.clock.Now()
-	if err := taxReturn.Submit(now); err != nil {
+	if err := taxReturn.Submit(now, filing.DefaultFormVersion, filing.DefaultRuleVersion); err != nil {
 		s.mu.Unlock()
-		return Assessment{}, err
+		return Assessment{}, fmt.Errorf("%w: %v", ErrInvalidTransition, err)
 	}
-	currency, err := foundation.NewCurrency("XCR", 2)
-	if err != nil {
-		s.mu.Unlock()
-		return Assessment{}, err
-	}
-	taxable, _ := foundation.NewMoney(0, currency)
-	for _, line := range taxReturn.Lines {
-		lineAmount, moneyErr := foundation.NewMoney(line.AmountMinor, currency)
-		if moneyErr != nil {
-			s.mu.Unlock()
-			return Assessment{}, moneyErr
-		}
-		taxable, moneyErr = taxable.Add(lineAmount)
-		if moneyErr != nil {
-			s.mu.Unlock()
-			return Assessment{}, moneyErr
-		}
-	}
-	amount, err := foundation.NewMoney(taxable.Minor()/10, currency)
-	if err != nil {
-		s.mu.Unlock()
-		return Assessment{}, err
-	}
+	amount := taxReturn.Calculation.Amount
 	assessment := Assessment{
 		ID: id.New[AssessmentTag](), TenantID: scope.Tenant().String(),
 		Jurisdiction: scope.Jurisdiction().String(), ReturnID: returnID, Amount: amount,
@@ -407,6 +484,13 @@ func (s *Service) SubmitAndAssess(
 			return Assessment{}, err
 		}
 	}
+	if err := s.emit(scope, "ReturnSubmitted", "return", returnID, map[string]string{
+		"formVersion": taxReturn.FormVersion, "ruleVersion": taxReturn.RuleVersion,
+		"payloadHash": taxReturn.FrozenPayloadHash,
+	}); err != nil {
+		s.mu.Unlock()
+		return Assessment{}, err
+	}
 	s.mu.Unlock()
 
 	if s.notifier != nil {
@@ -416,6 +500,70 @@ func (s *Service) SubmitAndAssess(
 		})
 	}
 	return assessment, nil
+}
+
+func (s *Service) GetReturn(scope foundation.Context, returnID string) (filing.TaxReturn, error) {
+	if err := scope.Validate(); err != nil {
+		return filing.TaxReturn{}, err
+	}
+	if err := s.authorize(scope, "return:read", returnID); err != nil {
+		return filing.TaxReturn{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	value, ok := s.returns[scope.IsolationKey(returnID)]
+	if !ok {
+		return filing.TaxReturn{}, ErrNotFound
+	}
+	return value, nil
+}
+
+func (s *Service) AmendReturn(scope foundation.Context, returnID string) (filing.TaxReturn, error) {
+	if err := scope.Validate(); err != nil {
+		return filing.TaxReturn{}, err
+	}
+	if err := s.authorize(scope, "return:amend", returnID); err != nil {
+		return filing.TaxReturn{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	original, ok := s.returns[scope.IsolationKey(returnID)]
+	if !ok {
+		return filing.TaxReturn{}, ErrNotFound
+	}
+	amendment, err := original.Amend(scope)
+	if err != nil {
+		return filing.TaxReturn{}, fmt.Errorf("%w: %v", ErrInvalidTransition, err)
+	}
+	s.returns[scope.IsolationKey(amendment.ID.String())] = amendment
+	if err := s.record(scope, "ReturnAmended", "return", amendment.ID.String()); err != nil {
+		return filing.TaxReturn{}, err
+	}
+	if err := s.emit(scope, "ReturnAmended", "return", amendment.ID.String(), map[string]string{
+		"originalReturnId": amendment.OriginalReturnID, "supersedesId": amendment.SupersedesID,
+	}); err != nil {
+		return filing.TaxReturn{}, err
+	}
+	return amendment, nil
+}
+
+func (s *Service) ReturnHistory(scope foundation.Context, returnID string) ([]filing.TaxReturn, error) {
+	value, err := s.GetReturn(scope, returnID)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	history := make([]filing.TaxReturn, 0)
+	for _, candidate := range s.returns {
+		if candidate.TenantID == scope.Tenant().String() &&
+			candidate.Jurisdiction == scope.Jurisdiction().String() &&
+			candidate.OriginalReturnID == value.OriginalReturnID {
+			history = append(history, candidate)
+		}
+	}
+	sort.Slice(history, func(i, j int) bool { return history[i].Revision < history[j].Revision })
+	return history, nil
 }
 
 func (s *Service) RecordPayment(

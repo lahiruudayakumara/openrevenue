@@ -129,4 +129,55 @@ func TestTaxpayerRegistrationHTTPVerticalSlice(t *testing.T) {
 		strings.Contains(repeatedApproval.Body.String(), "only a submitted registration") {
 		t.Fatalf("unsafe problem response = %s", repeatedApproval.Body)
 	}
+	drafted := httptest.NewRecorder()
+	router.ServeHTTP(drafted, authorizedRequest(
+		t, http.MethodPost, "/api/v1/returns",
+		fmt.Sprintf(
+			`{"taxpayerId":%q,"registrationId":%q,"periodId":"FY-DEMO-2026","formVersion":"sample-income-v1","ruleVersion":"fictional-flat-rate-v1","lines":[{"code":"GROSS","amountMinor":10005}]}`,
+			taxpayer.ID, registration.ID,
+		),
+	))
+	if drafted.Code != http.StatusCreated || !strings.Contains(drafted.Body.String(), `"formVersion":"sample-income-v1"`) {
+		t.Fatalf("draft status = %d body = %s", drafted.Code, drafted.Body)
+	}
+	var taxReturn struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(drafted.Body.Bytes(), &taxReturn); err != nil || taxReturn.ID == "" {
+		t.Fatalf("return response = %s, %v", drafted.Body, err)
+	}
+
+	for _, action := range []string{"validate", "calculate"} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, authorizedRequest(
+			t, http.MethodPost, fmt.Sprintf("/api/v1/returns/%s/%s", taxReturn.ID, action), "",
+		))
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d body = %s", action, response.Code, response.Body)
+		}
+	}
+	submission := httptest.NewRecorder()
+	router.ServeHTTP(submission, authorizedRequest(
+		t, http.MethodPost, fmt.Sprintf("/api/v1/returns/%s/submit", taxReturn.ID), "",
+	))
+	if submission.Code != http.StatusCreated ||
+		!strings.Contains(submission.Body.String(), `"minor":1001`) {
+		t.Fatalf("submission status = %d body = %s", submission.Code, submission.Body)
+	}
+	amendment := httptest.NewRecorder()
+	router.ServeHTTP(amendment, authorizedRequest(
+		t, http.MethodPost, fmt.Sprintf("/api/v1/returns/%s/amend", taxReturn.ID), "",
+	))
+	if amendment.Code != http.StatusCreated ||
+		!strings.Contains(amendment.Body.String(), `"revision":2`) {
+		t.Fatalf("amend status = %d body = %s", amendment.Code, amendment.Body)
+	}
+	history := httptest.NewRecorder()
+	router.ServeHTTP(history, authorizedRequest(
+		t, http.MethodGet, fmt.Sprintf("/api/v1/returns/%s/history", taxReturn.ID), "",
+	))
+	if history.Code != http.StatusOK ||
+		strings.Count(history.Body.String(), `"revision":`) != 2 {
+		t.Fatalf("history status = %d body = %s", history.Code, history.Body)
+	}
 }
