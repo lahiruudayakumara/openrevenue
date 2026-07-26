@@ -182,12 +182,41 @@ paths:
       summary: Create a return draft
       description: Create a draft tax return.
       tags: [Returns]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateReturnDraft" }
       responses:
         {
-          "201": { description: Draft created },
+          "201":
+            {
+              description: Draft created,
+              content:
+                {
+                  application/json:
+                    { schema: { $ref: "#/components/schemas/TaxReturn" } },
+                },
+            },
           "401": { $ref: "#/components/responses/Unauthorized" },
           default: { $ref: "#/components/responses/Problem" },
         }
+  /returns/{returnId}:
+    parameters: *domainContext
+    get:
+      operationId: getReturn
+      summary: Retrieve a return and its immutable version references
+      tags: [Returns]
+      parameters: [{ $ref: "#/components/parameters/ReturnId" }]
+      responses:
+        "200":
+          description: Return state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaxReturn" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/Problem" }
+        default: { $ref: "#/components/responses/Problem" }
   /returns/{returnId}/validate:
     parameters: *domainContext
     post:
@@ -198,10 +227,34 @@ paths:
       parameters: [{ $ref: "#/components/parameters/ReturnId" }]
       responses:
         {
-          "200": { description: Validated },
+          "200":
+            {
+              description: Stable field-level validation result,
+              content:
+                {
+                  application/json:
+                    { schema: { $ref: "#/components/schemas/TaxReturn" } },
+                },
+            },
           "401": { $ref: "#/components/responses/Unauthorized" },
           default: { $ref: "#/components/responses/Problem" },
         }
+  /returns/{returnId}/calculate:
+    parameters: *domainContext
+    post:
+      operationId: calculateReturn
+      summary: Calculate a validated return deterministically
+      tags: [Returns]
+      parameters: [{ $ref: "#/components/parameters/ReturnId" }]
+      responses:
+        "200":
+          description: Explainable calculation result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaxReturn" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Problem" }
+        default: { $ref: "#/components/responses/Problem" }
   /returns/{returnId}/submit:
     parameters: *domainContext
     post:
@@ -216,6 +269,44 @@ paths:
           "401": { $ref: "#/components/responses/Unauthorized" },
           default: { $ref: "#/components/responses/Problem" },
         }
+  /returns/{returnId}/amend:
+    parameters: *domainContext
+    post:
+      operationId: amendReturn
+      summary: Create a new draft revision from a submitted return
+      tags: [Returns]
+      parameters: [{ $ref: "#/components/parameters/ReturnId" }]
+      responses:
+        "201":
+          description: Amendment draft
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaxReturn" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Problem" }
+        default: { $ref: "#/components/responses/Problem" }
+  /returns/{returnId}/history:
+    parameters: *domainContext
+    get:
+      operationId: getReturnHistory
+      summary: Retrieve all revisions without mutating the original
+      tags: [Returns]
+      parameters: [{ $ref: "#/components/parameters/ReturnId" }]
+      responses:
+        "200":
+          description: Revision-ordered return history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [returns]
+                properties:
+                  returns:
+                    type: array
+                    items: { $ref: "#/components/schemas/TaxReturn" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/Problem" }
+        default: { $ref: "#/components/responses/Problem" }
   /payments:
     parameters: *domainContext
     post:
@@ -349,6 +440,112 @@ components:
         schema: { type: string, format: uuid },
       }
   schemas:
+    ReturnLine:
+      type: object
+      required: [code, amountMinor]
+      additionalProperties: false
+      properties:
+        code: { type: string, pattern: "^[A-Z][A-Z0-9_]{1,63}$" }
+        amountMinor: { type: integer, format: int64 }
+    CreateReturnDraft:
+      type: object
+      required:
+        [taxpayerId, registrationId, periodId, formVersion, ruleVersion, lines]
+      additionalProperties: false
+      properties:
+        taxpayerId: { type: string, format: uuid }
+        registrationId: { type: string, format: uuid }
+        periodId: { type: string }
+        formVersion: { type: string }
+        ruleVersion: { type: string }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/ReturnLine" }
+    ValidationIssue:
+      type: object
+      required: [field, code]
+      properties:
+        field: { type: string }
+        code:
+          type: string
+          enum:
+            [
+              RETURN_NOT_DRAFT,
+              FORM_VERSION_INCOMPATIBLE,
+              FIELD_CODE_INVALID,
+              AMOUNT_NEGATIVE,
+              FIELD_NOT_IN_FORM,
+              FIELD_DUPLICATE,
+              FIELD_REQUIRED,
+            ]
+    ValidationResult:
+      type: object
+      required: [valid, formVersion, payloadHash, issues]
+      properties:
+        valid: { type: boolean }
+        formVersion: { type: string }
+        payloadHash: { type: string, pattern: "^[a-f0-9]{64}$" }
+        issues:
+          type: array
+          items: { $ref: "#/components/schemas/ValidationIssue" }
+    CalculationStep:
+      type: object
+      required: [code, basisMinor, rateBasisPoints, resultMinor, rounding]
+      properties:
+        code: { type: string }
+        basisMinor: { type: integer, format: int64 }
+        rateBasisPoints: { type: integer, format: int64 }
+        resultMinor: { type: integer, format: int64 }
+        rounding: { type: string }
+    CalculationResult:
+      type: object
+      required: [ruleVersion, inputHash, amount, steps, resultHash]
+      properties:
+        ruleVersion: { type: string }
+        inputHash: { type: string, pattern: "^[a-f0-9]{64}$" }
+        amount: { $ref: "#/components/schemas/Money" }
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/CalculationStep" }
+        resultHash: { type: string, pattern: "^[a-f0-9]{64}$" }
+    TaxReturn:
+      type: object
+      required:
+        [
+          id,
+          tenantId,
+          jurisdiction,
+          taxpayerId,
+          registrationId,
+          periodId,
+          formVersion,
+          ruleVersion,
+          lines,
+          status,
+          revision,
+          originalReturnId,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        tenantId: { type: string }
+        jurisdiction: { type: string }
+        taxpayerId: { type: string, format: uuid }
+        registrationId: { type: string, format: uuid }
+        periodId: { type: string }
+        formVersion: { type: string }
+        ruleVersion: { type: string }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/ReturnLine" }
+        status:
+          { type: string, enum: [DRAFT, VALIDATED, CALCULATED, SUBMITTED] }
+        revision: { type: integer, minimum: 1 }
+        originalReturnId: { type: string, format: uuid }
+        supersedesId: { type: string, format: uuid }
+        validation: { $ref: "#/components/schemas/ValidationResult" }
+        calculation: { $ref: "#/components/schemas/CalculationResult" }
+        frozenPayloadHash: { type: string, pattern: "^[a-f0-9]{64}$" }
+        submittedAt: { type: string, format: date-time }
     CreateTaxpayer:
       {
         type: object,

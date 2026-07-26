@@ -27,6 +27,7 @@
         "TaxRegistrationApproved",
         "ReturnCreated",
         "ReturnValidated",
+        "ReturnCalculated",
         "ReturnSubmitted",
         "ReturnAmended",
         "AssessmentCreated",

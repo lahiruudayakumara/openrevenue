@@ -3,5 +3,8 @@ name: Fictional sample income tax
 currency: XCR
 filingFrequency: ANNUAL
 rate: {kind: FLAT, basisPoints: 1000}
+formVersion: sample-income-v1
+ruleVersion: fictional-flat-rate-v1
+rounding: HALF_AWAY_FROM_ZERO_TO_MINOR_UNIT
 effectiveFrom: 2026-01-01
 exampleOnly: true
