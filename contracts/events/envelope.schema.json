@@ -22,7 +22,7 @@
     },
     "eventType": {
       "enum": [
-        "TaxpayerRegistered",
+        "TaxpayerCreated",
         "TaxRegistrationSubmitted",
         "TaxRegistrationApproved",
         "ReturnCreated",

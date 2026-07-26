@@ -9,31 +9,75 @@ info:
   contact:
     name: OpenRevenue maintainers
     url: https://github.com/opencorex-org/openrevenue
-servers: [{url: /api/v1}]
+servers: [{ url: /api/v1 }]
 security:
   - bearerAuth: []
 tags:
-  - {name: Taxpayers, description: Taxpayer identity and registration}
-  - {name: Returns, description: Tax return lifecycle}
-  - {name: Payments, description: Revenue payment processing}
-  - {name: Ledger, description: Append-only taxpayer ledger}
-  - {name: Audit, description: Administrative audit events}
+  - { name: Taxpayers, description: Taxpayer identity and registration }
+  - { name: Returns, description: Tax return lifecycle }
+  - { name: Payments, description: Revenue payment processing }
+  - { name: Ledger, description: Append-only taxpayer ledger }
+  - { name: Audit, description: Administrative audit events }
 paths:
   /taxpayers:
     parameters: &domainContext
-      - {$ref: '#/components/parameters/TenantId'}
-      - {$ref: '#/components/parameters/JurisdictionCode'}
-      - {$ref: '#/components/parameters/ActorId'}
-      - {$ref: '#/components/parameters/ActorType'}
-      - {$ref: '#/components/parameters/CorrelationId'}
+      - { $ref: "#/components/parameters/TenantId" }
+      - { $ref: "#/components/parameters/JurisdictionCode" }
+      - { $ref: "#/components/parameters/ActorId" }
+      - { $ref: "#/components/parameters/ActorType" }
+      - { $ref: "#/components/parameters/CorrelationId" }
+      - { $ref: "#/components/parameters/CausationId" }
     post:
       operationId: createTaxpayer
       summary: Create a taxpayer
       description: Create a taxpayer record.
       tags: [Taxpayers]
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateTaxpayer'}}}}
-      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Taxpayer'}}}}, '401': {$ref: '#/components/responses/Unauthorized'}, default: {$ref: '#/components/responses/Problem'}}
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                { schema: { $ref: "#/components/schemas/CreateTaxpayer" } },
+            },
+        }
+      responses:
+        {
+          "201":
+            {
+              description: Created,
+              content:
+                {
+                  application/json:
+                    { schema: { $ref: "#/components/schemas/Taxpayer" } },
+                },
+            },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          default: { $ref: "#/components/responses/Problem" },
+        }
+  /taxpayers/{taxpayerId}:
+    parameters: *domainContext
+    get:
+      operationId: getTaxpayer
+      summary: Retrieve a taxpayer
+      tags: [Taxpayers]
+      parameters: [{ $ref: "#/components/parameters/TaxpayerId" }]
+      responses:
+        {
+          "200":
+            {
+              description: Taxpayer state,
+              content:
+                {
+                  application/json:
+                    { schema: { $ref: "#/components/schemas/Taxpayer" } },
+                },
+            },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          "404": { $ref: "#/components/responses/Problem" },
+          default: { $ref: "#/components/responses/Problem" },
+        }
   /taxpayers/{taxpayerId}/tax-registrations:
     parameters: *domainContext
     post:
@@ -41,9 +85,96 @@ paths:
       summary: Register a taxpayer for a tax type
       description: Submit a tax registration for a taxpayer.
       tags: [Taxpayers]
-      parameters: [{name: taxpayerId, in: path, required: true, schema: {type: string, format: uuid}}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [taxType], properties: {taxType: {type: string}}}}}}
-      responses: {'201': {description: Registered}, '401': {$ref: '#/components/responses/Unauthorized'}, default: {$ref: '#/components/responses/Problem'}}
+      parameters:
+        [
+          {
+            name: taxpayerId,
+            in: path,
+            required: true,
+            schema: { type: string, format: uuid },
+          },
+        ]
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    {
+                      type: object,
+                      required: [taxType],
+                      properties: { taxType: { type: string } },
+                    },
+                },
+            },
+        }
+      responses:
+        {
+          "201":
+            {
+              description: Submitted,
+              content:
+                {
+                  application/json:
+                    {
+                      schema: { $ref: "#/components/schemas/TaxRegistration" },
+                    },
+                },
+            },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          default: { $ref: "#/components/responses/Problem" },
+        }
+  /tax-registrations/{registrationId}:
+    parameters: *domainContext
+    get:
+      operationId: getTaxRegistration
+      summary: Retrieve a tax registration
+      tags: [Taxpayers]
+      parameters: [{ $ref: "#/components/parameters/RegistrationId" }]
+      responses:
+        {
+          "200":
+            {
+              description: Registration state,
+              content:
+                {
+                  application/json:
+                    {
+                      schema: { $ref: "#/components/schemas/TaxRegistration" },
+                    },
+                },
+            },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          "404": { $ref: "#/components/responses/Problem" },
+          default: { $ref: "#/components/responses/Problem" },
+        }
+  /tax-registrations/{registrationId}/approve:
+    parameters: *domainContext
+    post:
+      operationId: approveTaxRegistration
+      summary: Approve a submitted tax registration
+      tags: [Taxpayers]
+      parameters: [{ $ref: "#/components/parameters/RegistrationId" }]
+      responses:
+        {
+          "200":
+            {
+              description: Approved,
+              content:
+                {
+                  application/json:
+                    {
+                      schema: { $ref: "#/components/schemas/TaxRegistration" },
+                    },
+                },
+            },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "409": { $ref: "#/components/responses/Problem" },
+          default: { $ref: "#/components/responses/Problem" },
+        }
   /returns:
     parameters: *domainContext
     post:
@@ -51,7 +182,12 @@ paths:
       summary: Create a return draft
       description: Create a draft tax return.
       tags: [Returns]
-      responses: {'201': {description: Draft created}, '401': {$ref: '#/components/responses/Unauthorized'}, default: {$ref: '#/components/responses/Problem'}}
+      responses:
+        {
+          "201": { description: Draft created },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          default: { $ref: "#/components/responses/Problem" },
+        }
   /returns/{returnId}/validate:
     parameters: *domainContext
     post:
@@ -59,8 +195,13 @@ paths:
       summary: Validate a return draft
       description: Validate a draft return without submitting it.
       tags: [Returns]
-      parameters: [{$ref: '#/components/parameters/ReturnId'}]
-      responses: {'200': {description: Validated}, '401': {$ref: '#/components/responses/Unauthorized'}, default: {$ref: '#/components/responses/Problem'}}
+      parameters: [{ $ref: "#/components/parameters/ReturnId" }]
+      responses:
+        {
+          "200": { description: Validated },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          default: { $ref: "#/components/responses/Problem" },
+        }
   /returns/{returnId}/submit:
     parameters: *domainContext
     post:
@@ -68,8 +209,13 @@ paths:
       summary: Submit a return
       description: Submit a validated return for assessment.
       tags: [Returns]
-      parameters: [{$ref: '#/components/parameters/ReturnId'}]
-      responses: {'201': {description: Submitted and assessed}, '401': {$ref: '#/components/responses/Unauthorized'}, default: {$ref: '#/components/responses/Problem'}}
+      parameters: [{ $ref: "#/components/parameters/ReturnId" }]
+      responses:
+        {
+          "201": { description: Submitted and assessed },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          default: { $ref: "#/components/responses/Problem" },
+        }
   /payments:
     parameters: *domainContext
     post:
@@ -81,8 +227,21 @@ paths:
         required: true
         content:
           application/json:
-            schema: {$ref: '#/components/schemas/RecordPayment'}
-      responses: {'201': {description: Recorded and allocated, content: {application/json: {schema: {$ref: '#/components/schemas/Payment'}}}}, '401': {$ref: '#/components/responses/Unauthorized'}, default: {$ref: '#/components/responses/Problem'}}
+            schema: { $ref: "#/components/schemas/RecordPayment" }
+      responses:
+        {
+          "201":
+            {
+              description: Recorded and allocated,
+              content:
+                {
+                  application/json:
+                    { schema: { $ref: "#/components/schemas/Payment" } },
+                },
+            },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          default: { $ref: "#/components/responses/Problem" },
+        }
   /taxpayers/{taxpayerId}/ledger:
     parameters: *domainContext
     get:
@@ -90,8 +249,21 @@ paths:
       summary: Get a taxpayer ledger
       description: Retrieve the taxpayer's append-only ledger.
       tags: [Ledger]
-      parameters: [{name: taxpayerId, in: path, required: true, schema: {type: string, format: uuid}}]
-      responses: {'200': {description: Append-only ledger}, '401': {$ref: '#/components/responses/Unauthorized'}, default: {$ref: '#/components/responses/Problem'}}
+      parameters:
+        [
+          {
+            name: taxpayerId,
+            in: path,
+            required: true,
+            schema: { type: string, format: uuid },
+          },
+        ]
+      responses:
+        {
+          "200": { description: Append-only ledger },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          default: { $ref: "#/components/responses/Problem" },
+        }
   /admin/audit-events:
     parameters: *domainContext
     get:
@@ -99,7 +271,12 @@ paths:
       summary: List administrative audit events
       description: List immutable administrative audit events.
       tags: [Audit]
-      responses: {'200': {description: Immutable audit events}, '401': {$ref: '#/components/responses/Unauthorized'}, default: {$ref: '#/components/responses/Problem'}}
+      responses:
+        {
+          "200": { description: Immutable audit events },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          default: { $ref: "#/components/responses/Problem" },
+        }
 components:
   securitySchemes:
     bearerAuth:
@@ -112,76 +289,158 @@ components:
       in: header
       required: true
       description: Canonical lowercase tenant isolation key.
-      schema: {type: string, pattern: '^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$'}
+      schema: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$" }
     JurisdictionCode:
       name: X-Jurisdiction-Code
       in: header
       required: true
       description: Canonical uppercase country or country-subdivision code.
-      schema: {type: string, pattern: '^[A-Z]{2}(-[A-Z0-9]{1,3})?$'}
+      schema: { type: string, pattern: "^[A-Z]{2}(-[A-Z0-9]{1,3})?$" }
     ActorId:
       name: X-Actor-ID
       in: header
       required: true
       description: Opaque actor identifier derived from trusted identity claims.
-      schema: {type: string, minLength: 1, maxLength: 128}
+      schema: { type: string, minLength: 1, maxLength: 128 }
     ActorType:
       name: X-Actor-Type
       in: header
       required: false
       description: Actor category; defaults to USER.
-      schema: {type: string, enum: [USER, SERVICE, SYSTEM], default: USER}
+      schema: { type: string, enum: [USER, SERVICE, SYSTEM], default: USER }
     CorrelationId:
       name: X-Correlation-ID
       in: header
       required: false
       description: Safe request correlation identifier generated when omitted.
-      schema: {type: string, minLength: 1, maxLength: 128}
-    IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, maxLength: 128}}
-    ReturnId: {name: returnId, in: path, required: true, schema: {type: string, format: uuid}}
+      schema: { type: string, minLength: 1, maxLength: 128 }
+    CausationId:
+      name: X-Causation-ID
+      in: header
+      required: false
+      description: Identifier of the command or event that caused this request; defaults to the correlation identifier.
+      schema: { type: string, minLength: 1, maxLength: 128 }
+    IdempotencyKey:
+      {
+        name: Idempotency-Key,
+        in: header,
+        required: true,
+        schema: { type: string, maxLength: 128 },
+      }
+    TaxpayerId:
+      {
+        name: taxpayerId,
+        in: path,
+        required: true,
+        schema: { type: string, format: uuid },
+      }
+    RegistrationId:
+      {
+        name: registrationId,
+        in: path,
+        required: true,
+        schema: { type: string, format: uuid },
+      }
+    ReturnId:
+      {
+        name: returnId,
+        in: path,
+        required: true,
+        schema: { type: string, format: uuid },
+      }
   schemas:
-    CreateTaxpayer: {type: object, required: [name, identifier], additionalProperties: false, properties: {name: {type: string}, identifier: {type: string}}}
+    CreateTaxpayer:
+      {
+        type: object,
+        required: [name, identifier],
+        additionalProperties: false,
+        properties: { name: { type: string }, identifier: { type: string } },
+      }
     Taxpayer:
       type: object
-      required: [id, tenantId, jurisdiction, name, identifier, identifierScheme]
+      required:
+        [
+          id,
+          tenantId,
+          jurisdiction,
+          name,
+          identifier,
+          identifierScheme,
+          createdAt,
+        ]
       properties:
-        id: {type: string, format: uuid}
-        tenantId: {type: string}
-        jurisdiction: {type: string}
-        name: {type: string}
-        identifier: {type: string}
-        identifierScheme: {type: string}
+        id: { type: string, format: uuid }
+        tenantId: { type: string }
+        jurisdiction: { type: string }
+        name: { type: string }
+        identifier: { type: string }
+        identifierScheme: { type: string }
+        createdAt: { type: string, format: date-time }
+    TaxRegistration:
+      type: object
+      required:
+        [id, tenantId, jurisdiction, taxpayerId, taxType, status, submittedAt]
+      properties:
+        id: { type: string, format: uuid }
+        tenantId: { type: string }
+        jurisdiction: { type: string }
+        taxpayerId: { type: string, format: uuid }
+        taxType: { type: string }
+        status: { type: string, enum: [SUBMITTED, APPROVED] }
+        submittedAt: { type: string, format: date-time }
+        approvedAt: { type: string, format: date-time }
+        approvedBy: { type: string }
     Money:
       type: object
       required: [minor, currency, minorUnits]
       properties:
-        minor: {type: integer, format: int64}
-        currency: {type: string, pattern: '^[A-Z]{3}$'}
-        minorUnits: {type: integer, minimum: 0, maximum: 6}
+        minor: { type: integer, format: int64 }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
+        minorUnits: { type: integer, minimum: 0, maximum: 6 }
     RecordPayment:
       type: object
       required: [taxpayerId, assessmentId, amountMinor, currency]
       additionalProperties: false
       properties:
-        taxpayerId: {type: string, format: uuid}
-        assessmentId: {type: string, format: uuid}
-        amountMinor: {type: integer, format: int64, minimum: 1}
-        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        taxpayerId: { type: string, format: uuid }
+        assessmentId: { type: string, format: uuid }
+        amountMinor: { type: integer, format: int64, minimum: 1 }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
     Payment:
       type: object
       required: [id, tenantId, jurisdiction, taxpayerId, amount, allocatedTo]
       properties:
-        id: {type: string, format: uuid}
-        tenantId: {type: string}
-        jurisdiction: {type: string}
-        taxpayerId: {type: string, format: uuid}
-        amount: {$ref: '#/components/schemas/Money'}
-        allocatedTo: {type: string, format: uuid}
-    Problem: {type: object, required: [type, title, status], properties: {type: {type: string, format: uri-reference}, title: {type: string}, status: {type: integer}, detail: {type: string}, instance: {type: string}}}
+        id: { type: string, format: uuid }
+        tenantId: { type: string }
+        jurisdiction: { type: string }
+        taxpayerId: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/Money" }
+        allocatedTo: { type: string, format: uuid }
+    Problem:
+      {
+        type: object,
+        required: [type, title, status],
+        properties:
+          {
+            type: { type: string, format: uri-reference },
+            title: { type: string },
+            status: { type: integer },
+            detail: { type: string },
+            instance: { type: string },
+          },
+      }
   responses:
     Unauthorized:
       description: Authentication is required or the bearer token is invalid
       content:
         application/problem+json:
-          schema: {$ref: '#/components/schemas/Problem'}
-    Problem: {description: RFC 9457 problem details, content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}}
+          schema: { $ref: "#/components/schemas/Problem" }
+    Problem:
+      {
+        description: RFC 9457 problem details,
+        content:
+          {
+            application/problem+json:
+              { schema: { $ref: "#/components/schemas/Problem" } },
+          },
+      }

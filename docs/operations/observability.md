@@ -8,3 +8,14 @@ ID but must not contain taxpayer identifiers, authorization headers, raw tenant
 claims, or request payloads. Money mismatch and overflow failures are security-
 and integrity-relevant application errors; alert on recurrence without recording
 the underlying sensitive values.
+
+The taxpayer-registration vertical slice exports low-cardinality counters for
+successful taxpayer creation, registration submission, registration approval,
+and safe request failures. Tenant identifiers, jurisdiction identifiers,
+taxpayer identifiers, names, bearer tokens, and idempotency keys must never be
+metric labels or log fields.
+
+Operators should alert on a sustained increase in
+`openrevenue_registration_vertical_slice_failures_total` relative to successful
+submissions and approvals. Audit and integration events carry correlation and
+causation identifiers for trace linkage without exposing taxpayer data.
