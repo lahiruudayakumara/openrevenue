@@ -164,6 +164,54 @@ func TestTaxpayerRegistrationHTTPVerticalSlice(t *testing.T) {
 		!strings.Contains(submission.Body.String(), `"minor":1001`) {
 		t.Fatalf("submission status = %d body = %s", submission.Code, submission.Body)
 	}
+	var assessment struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(submission.Body.Bytes(), &assessment); err != nil || assessment.ID == "" {
+		t.Fatalf("assessment response = %s, %v", submission.Body, err)
+	}
+	paymentRequest := authorizedRequest(
+		t, http.MethodPost, "/api/v1/payments",
+		fmt.Sprintf(
+			`{"taxpayerId":%q,"amountMinor":1001,"currency":"XCR"}`,
+			taxpayer.ID,
+		),
+	)
+	paymentRequest.Header.Set("Idempotency-Key", "payment-api-1")
+	paymentResponse := httptest.NewRecorder()
+	router.ServeHTTP(paymentResponse, paymentRequest)
+	if paymentResponse.Code != http.StatusCreated ||
+		!strings.Contains(paymentResponse.Body.String(), `"status":"UNAPPLIED"`) {
+		t.Fatalf("payment status = %d body = %s", paymentResponse.Code, paymentResponse.Body)
+	}
+	var payment struct {
+		ID      string `json:"id"`
+		Version uint64 `json:"version"`
+	}
+	if err := json.Unmarshal(paymentResponse.Body.Bytes(), &payment); err != nil || payment.ID == "" {
+		t.Fatalf("payment response = %s, %v", paymentResponse.Body, err)
+	}
+	allocationResponse := httptest.NewRecorder()
+	router.ServeHTTP(allocationResponse, authorizedRequest(
+		t, http.MethodPost, fmt.Sprintf("/api/v1/payments/%s/allocations", payment.ID),
+		fmt.Sprintf(
+			`{"assessmentId":%q,"amountMinor":1001,"currency":"XCR","expectedVersion":%d}`,
+			assessment.ID, payment.Version,
+		),
+	))
+	if allocationResponse.Code != http.StatusOK ||
+		!strings.Contains(allocationResponse.Body.String(), `"status":"ALLOCATED"`) {
+		t.Fatalf("allocation status = %d body = %s", allocationResponse.Code, allocationResponse.Body)
+	}
+	ledgerResponse := httptest.NewRecorder()
+	router.ServeHTTP(ledgerResponse, authorizedRequest(
+		t, http.MethodGet, fmt.Sprintf("/api/v1/taxpayers/%s/ledger", taxpayer.ID), "",
+	))
+	if ledgerResponse.Code != http.StatusOK ||
+		!strings.Contains(ledgerResponse.Body.String(), `"netDueMinor":0`) ||
+		strings.Count(ledgerResponse.Body.String(), `"postingId":`) != 6 {
+		t.Fatalf("ledger status = %d body = %s", ledgerResponse.Code, ledgerResponse.Body)
+	}
 	amendment := httptest.NewRecorder()
 	router.ServeHTTP(amendment, authorizedRequest(
 		t, http.MethodPost, fmt.Sprintf("/api/v1/returns/%s/amend", taxReturn.ID), "",
