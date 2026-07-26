@@ -42,7 +42,12 @@ func Correlation(next http.Handler) http.Handler {
 func Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") && r.Header.Get("Authorization") == "" {
-			http.Error(w, "authorization required", http.StatusUnauthorized)
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"type":  "https://openrevenue.org/problems/unauthorized",
+				"title": "Authentication required", "status": http.StatusUnauthorized,
+			})
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -80,6 +85,18 @@ func RequireDomainContext(next http.Handler) http.Handler {
 		if err != nil {
 			writeContextProblem(w, "The request domain context is invalid.")
 			return
+		}
+		if value := r.Header.Get("X-Causation-ID"); value != "" {
+			causation, causationErr := foundation.NewCorrelationID(value)
+			if causationErr != nil {
+				writeContextProblem(w, "X-Causation-ID is invalid.")
+				return
+			}
+			scope, err = scope.WithCausationID(causation)
+			if err != nil {
+				writeContextProblem(w, "X-Causation-ID is invalid.")
+				return
+			}
 		}
 		ctx := context.WithValue(r.Context(), domainContextKey, scope)
 		next.ServeHTTP(w, r.WithContext(ctx))

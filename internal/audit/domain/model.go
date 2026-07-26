@@ -16,10 +16,12 @@ type Event struct {
 	Jurisdiction  string            `json:"jurisdiction"`
 	Action        string            `json:"action"`
 	Actor         string            `json:"actor"`
+	ActorType     string            `json:"actorType"`
 	ResourceType  string            `json:"resourceType"`
 	ResourceID    string            `json:"resourceId"`
 	OccurredAt    time.Time         `json:"occurredAt"`
 	CorrelationID string            `json:"correlationId"`
+	CausationID   string            `json:"causationId"`
 	Metadata      map[string]string `json:"metadata,omitempty"`
 }
 
@@ -36,8 +38,10 @@ func New(scope foundation.Context, action, resourceType, resourceID string, now 
 	return Event{
 		ID: id.New[EventTag](), TenantID: scope.Tenant().String(),
 		Jurisdiction: scope.Jurisdiction().String(), Action: action,
-		Actor: scope.Actor().ID(), ResourceType: resourceType,
-		ResourceID: resourceID, CorrelationID: scope.CorrelationID().String(),
-		OccurredAt: now.UTC(),
+		Actor: scope.Actor().ID(), ActorType: string(scope.Actor().Kind()),
+		ResourceType: resourceType, ResourceID: resourceID,
+		CorrelationID: scope.CorrelationID().String(),
+		CausationID:   scope.CausationID().String(),
+		OccurredAt:    now.UTC(),
 	}, nil
 }

@@ -2,7 +2,9 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -10,32 +12,38 @@ import (
 
 	audit "github.com/opencorex-org/openrevenue/internal/audit/domain"
 	filing "github.com/opencorex-org/openrevenue/internal/filing/domain"
+	event "github.com/opencorex-org/openrevenue/internal/integration/domain"
 	ledger "github.com/opencorex-org/openrevenue/internal/ledger/domain"
+	taxpayer "github.com/opencorex-org/openrevenue/internal/taxpayer/domain"
+	registration "github.com/opencorex-org/openrevenue/internal/taxregistration/domain"
 	foundation "github.com/opencorex-org/openrevenue/pkg/domain"
 	"github.com/opencorex-org/openrevenue/pkg/id"
 )
 
-type TaxpayerTag struct{}
-type RegistrationTag struct{}
 type AssessmentTag struct{}
 type PaymentTag struct{}
 
-type Taxpayer struct {
-	ID           id.ID[TaxpayerTag] `json:"id"`
-	TenantID     string             `json:"tenantId"`
-	Jurisdiction string             `json:"jurisdiction"`
-	Name         string             `json:"name"`
-	Identifier   string             `json:"identifier"`
-	Scheme       string             `json:"identifierScheme"`
+type Taxpayer = taxpayer.Taxpayer
+type Registration = registration.Registration
+
+var (
+	ErrNotFound          = errors.New("resource not found")
+	ErrConflict          = errors.New("resource conflict")
+	ErrForbidden         = errors.New("operation forbidden")
+	ErrInvalidTransition = errors.New("invalid state transition")
+)
+
+type Authorizer interface {
+	Authorize(foundation.Context, string, string) error
 }
 
-type Registration struct {
-	ID           id.ID[RegistrationTag] `json:"id"`
-	TenantID     string                 `json:"tenantId"`
-	Jurisdiction string                 `json:"jurisdiction"`
-	TaxpayerID   string                 `json:"taxpayerId"`
-	TaxType      string                 `json:"taxType"`
-	Status       string                 `json:"status"`
+type allowAllAuthorizer struct{}
+
+func (allowAllAuthorizer) Authorize(foundation.Context, string, string) error { return nil }
+
+type idempotencyRecord struct {
+	Fingerprint [32]byte
+	Taxpayer    Taxpayer
 }
 
 type Assessment struct {
@@ -72,7 +80,10 @@ type Service struct {
 	payments      map[string]Payment
 	entries       []ledger.Entry
 	audits        []audit.Event
-	idempotency   map[string]any
+	events        []event.Event
+	idempotency   map[string]idempotencyRecord
+	identifiers   map[string]string
+	authorizer    Authorizer
 }
 
 func New(notifier Notifier) *Service {
@@ -80,14 +91,22 @@ func New(notifier Notifier) *Service {
 }
 
 func NewWithClock(notifier Notifier, clock foundation.Clock) *Service {
+	return NewWithDependencies(notifier, clock, allowAllAuthorizer{})
+}
+
+func NewWithDependencies(notifier Notifier, clock foundation.Clock, authorizer Authorizer) *Service {
 	if clock == nil {
 		panic("application clock is required")
+	}
+	if authorizer == nil {
+		panic("application authorizer is required")
 	}
 	return &Service{
 		clock: clock, notifier: notifier, taxpayers: map[string]Taxpayer{},
 		registrations: map[string]Registration{}, returns: map[string]filing.TaxReturn{},
 		assessments: map[string]Assessment{}, payments: map[string]Payment{},
-		idempotency: map[string]any{},
+		idempotency: map[string]idempotencyRecord{}, identifiers: map[string]string{},
+		authorizer: authorizer,
 	}
 }
 
@@ -100,6 +119,22 @@ func (s *Service) record(scope foundation.Context, action, kind, resourceID stri
 	return nil
 }
 
+func (s *Service) emit(scope foundation.Context, eventType, kind, resourceID string, data map[string]string) error {
+	value, err := event.New(scope, eventType, kind, resourceID, s.clock.Now(), data)
+	if err != nil {
+		return err
+	}
+	s.events = append(s.events, value)
+	return nil
+}
+
+func (s *Service) authorize(scope foundation.Context, permission, resourceID string) error {
+	if err := s.authorizer.Authorize(scope, permission, resourceID); err != nil {
+		return fmt.Errorf("%w: %v", ErrForbidden, err)
+	}
+	return nil
+}
+
 func (s *Service) CreateTaxpayer(
 	scope foundation.Context,
 	name string,
@@ -109,12 +144,15 @@ func (s *Service) CreateTaxpayer(
 	if err := scope.Validate(); err != nil {
 		return Taxpayer{}, err
 	}
+	if err := s.authorize(scope, "taxpayer:create", ""); err != nil {
+		return Taxpayer{}, err
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Taxpayer{}, errors.New("taxpayer name is required")
 	}
-	if idempotencyKey == "" {
-		return Taxpayer{}, errors.New("idempotency key is required")
+	if idempotencyKey == "" || len(idempotencyKey) > 128 {
+		return Taxpayer{}, errors.New("idempotency key must contain 1-128 characters")
 	}
 	identifier, err := foundation.NewTaxpayerIdentifier(
 		scope.Tenant(),
@@ -130,20 +168,33 @@ func (s *Service) CreateTaxpayer(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	idempotencyKey = scope.IsolationKey("idempotency:" + idempotencyKey)
+	fingerprint := sha256.Sum256([]byte(name + "\x00" + identifier.Scheme() + "\x00" + identifier.String()))
 	if value, ok := s.idempotency[idempotencyKey]; ok {
-		return value.(Taxpayer), nil
+		if value.Fingerprint != fingerprint {
+			return Taxpayer{}, fmt.Errorf("%w: idempotency key was already used for another request", ErrConflict)
+		}
+		return value.Taxpayer, nil
 	}
-	taxpayer := Taxpayer{
-		ID: id.New[TaxpayerTag](), TenantID: scope.Tenant().String(),
-		Jurisdiction: scope.Jurisdiction().String(), Name: name,
-		Identifier: identifier.String(), Scheme: identifier.Scheme(),
+	identifierKey := scope.IsolationKey("identifier:" + identifier.Scheme() + ":" + identifier.String())
+	if _, exists := s.identifiers[identifierKey]; exists {
+		return Taxpayer{}, fmt.Errorf("%w: taxpayer identifier already exists", ErrConflict)
 	}
-	s.taxpayers[scope.IsolationKey(taxpayer.ID.String())] = taxpayer
-	s.idempotency[idempotencyKey] = taxpayer
-	if err := s.record(scope, "TaxpayerRegistered", "taxpayer", taxpayer.ID.String()); err != nil {
+	value, err := taxpayer.New(scope, name, identifier, s.clock.Now())
+	if err != nil {
 		return Taxpayer{}, err
 	}
-	return taxpayer, nil
+	s.taxpayers[scope.IsolationKey(value.ID.String())] = value
+	s.identifiers[identifierKey] = value.ID.String()
+	s.idempotency[idempotencyKey] = idempotencyRecord{Fingerprint: fingerprint, Taxpayer: value}
+	if err := s.record(scope, "TaxpayerCreated", "taxpayer", value.ID.String()); err != nil {
+		return Taxpayer{}, err
+	}
+	if err := s.emit(scope, "TaxpayerCreated", "taxpayer", value.ID.String(), map[string]string{
+		"identifierScheme": value.IdentifierScheme,
+	}); err != nil {
+		return Taxpayer{}, err
+	}
+	return value, nil
 }
 
 func (s *Service) Register(
@@ -154,24 +205,89 @@ func (s *Service) Register(
 	if err := scope.Validate(); err != nil {
 		return Registration{}, err
 	}
-	if strings.TrimSpace(taxType) == "" {
-		return Registration{}, errors.New("tax type is required")
+	if err := s.authorize(scope, "tax-registration:submit", taxpayerID); err != nil {
+		return Registration{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.taxpayers[scope.IsolationKey(taxpayerID)]; !ok {
-		return Registration{}, errors.New("taxpayer not found")
+		return Registration{}, ErrNotFound
 	}
-	registration := Registration{
-		ID: id.New[RegistrationTag](), TenantID: scope.Tenant().String(),
-		Jurisdiction: scope.Jurisdiction().String(), TaxpayerID: taxpayerID,
-		TaxType: taxType, Status: "APPROVED",
-	}
-	s.registrations[scope.IsolationKey(registration.ID.String())] = registration
-	if err := s.record(scope, "TaxRegistrationApproved", "registration", registration.ID.String()); err != nil {
+	value, err := registration.Submit(scope, taxpayerID, taxType, s.clock.Now())
+	if err != nil {
 		return Registration{}, err
 	}
-	return registration, nil
+	s.registrations[scope.IsolationKey(value.ID.String())] = value
+	if err := s.record(scope, "TaxRegistrationSubmitted", "tax_registration", value.ID.String()); err != nil {
+		return Registration{}, err
+	}
+	if err := s.emit(scope, "TaxRegistrationSubmitted", "tax_registration", value.ID.String(), map[string]string{
+		"taxpayerId": taxpayerID, "taxType": value.TaxType,
+	}); err != nil {
+		return Registration{}, err
+	}
+	return value, nil
+}
+
+func (s *Service) ApproveRegistration(scope foundation.Context, registrationID string) (Registration, error) {
+	if err := scope.Validate(); err != nil {
+		return Registration{}, err
+	}
+	if err := s.authorize(scope, "tax-registration:approve", registrationID); err != nil {
+		return Registration{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scope.IsolationKey(registrationID)
+	value, ok := s.registrations[key]
+	if !ok {
+		return Registration{}, ErrNotFound
+	}
+	if err := value.Approve(scope, s.clock.Now()); err != nil {
+		return Registration{}, fmt.Errorf("%w: %v", ErrInvalidTransition, err)
+	}
+	s.registrations[key] = value
+	if err := s.record(scope, "TaxRegistrationApproved", "tax_registration", registrationID); err != nil {
+		return Registration{}, err
+	}
+	if err := s.emit(scope, "TaxRegistrationApproved", "tax_registration", registrationID, map[string]string{
+		"taxpayerId": value.TaxpayerID, "taxType": value.TaxType,
+	}); err != nil {
+		return Registration{}, err
+	}
+	return value, nil
+}
+
+func (s *Service) GetTaxpayer(scope foundation.Context, taxpayerID string) (Taxpayer, error) {
+	if err := scope.Validate(); err != nil {
+		return Taxpayer{}, err
+	}
+	if err := s.authorize(scope, "taxpayer:read", taxpayerID); err != nil {
+		return Taxpayer{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	value, ok := s.taxpayers[scope.IsolationKey(taxpayerID)]
+	if !ok {
+		return Taxpayer{}, ErrNotFound
+	}
+	return value, nil
+}
+
+func (s *Service) GetRegistration(scope foundation.Context, registrationID string) (Registration, error) {
+	if err := scope.Validate(); err != nil {
+		return Registration{}, err
+	}
+	if err := s.authorize(scope, "tax-registration:read", registrationID); err != nil {
+		return Registration{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	value, ok := s.registrations[scope.IsolationKey(registrationID)]
+	if !ok {
+		return Registration{}, ErrNotFound
+	}
+	return value, nil
 }
 
 func (s *Service) DraftReturn(
@@ -186,8 +302,8 @@ func (s *Service) DraftReturn(
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	registration, ok := s.registrations[scope.IsolationKey(registrationID)]
-	if !ok || registration.TaxpayerID != taxpayerID {
+	taxRegistration, ok := s.registrations[scope.IsolationKey(registrationID)]
+	if !ok || taxRegistration.TaxpayerID != taxpayerID || taxRegistration.Status != registration.StatusApproved {
 		return filing.TaxReturn{}, errors.New("registration not found")
 	}
 	taxReturn, err := filing.New(scope, taxpayerID, registrationID, periodID, lines)
@@ -388,6 +504,22 @@ func (s *Service) Audits(scope foundation.Context) ([]audit.Event, error) {
 		if event.TenantID == scope.Tenant().String() &&
 			event.Jurisdiction == scope.Jurisdiction().String() {
 			events = append(events, event)
+		}
+	}
+	return events, nil
+}
+
+func (s *Service) Events(scope foundation.Context) ([]event.Event, error) {
+	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	events := make([]event.Event, 0)
+	for _, value := range s.events {
+		if value.Tenant == scope.Tenant().String() &&
+			value.Jurisdiction == scope.Jurisdiction().String() {
+			events = append(events, value)
 		}
 	}
 	return events, nil

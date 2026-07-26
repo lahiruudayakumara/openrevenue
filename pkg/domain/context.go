@@ -95,10 +95,14 @@ type Context struct {
 	jurisdiction Jurisdiction
 	actor        Actor
 	correlation  CorrelationID
+	causation    CorrelationID
 }
 
 func NewContext(tenant TenantID, jurisdiction Jurisdiction, actor Actor, correlation CorrelationID) (Context, error) {
-	c := Context{tenant: tenant, jurisdiction: jurisdiction, actor: actor, correlation: correlation}
+	c := Context{
+		tenant: tenant, jurisdiction: jurisdiction, actor: actor,
+		correlation: correlation, causation: correlation,
+	}
 	if err := c.Validate(); err != nil {
 		return Context{}, err
 	}
@@ -109,6 +113,14 @@ func (c Context) Tenant() TenantID             { return c.tenant }
 func (c Context) Jurisdiction() Jurisdiction   { return c.jurisdiction }
 func (c Context) Actor() Actor                 { return c.actor }
 func (c Context) CorrelationID() CorrelationID { return c.correlation }
+func (c Context) CausationID() CorrelationID   { return c.causation }
+func (c Context) WithCausationID(causation CorrelationID) (Context, error) {
+	c.causation = causation
+	if err := c.Validate(); err != nil {
+		return Context{}, err
+	}
+	return c, nil
+}
 func (c Context) Validate() error {
 	if err := c.tenant.Validate(); err != nil {
 		return err
@@ -119,7 +131,10 @@ func (c Context) Validate() error {
 	if err := c.actor.Validate(); err != nil {
 		return err
 	}
-	return c.correlation.Validate()
+	if err := c.correlation.Validate(); err != nil {
+		return err
+	}
+	return c.causation.Validate()
 }
 
 // IsolationKey returns a process-local composite key. It must not be logged.

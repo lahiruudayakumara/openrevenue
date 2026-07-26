@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,6 +10,18 @@ import (
 
 	app "github.com/opencorex-org/openrevenue/internal/administration/application"
 )
+
+func authorizedRequest(t *testing.T, method, path, body string) *http.Request {
+	t.Helper()
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer synthetic")
+	request.Header.Set("X-Tenant-ID", "revenue")
+	request.Header.Set("X-Jurisdiction-Code", "LK")
+	request.Header.Set("X-Actor-ID", "officer")
+	request.Header.Set("X-Correlation-ID", "api-registration-test")
+	request.Header.Set("Content-Type", "application/json")
+	return request
+}
 
 func TestOperationalAndAuthenticationBoundaries(t *testing.T) {
 	router := Router(app.New(nil))
@@ -50,5 +64,69 @@ func TestOperationalAndAuthenticationBoundaries(t *testing.T) {
 	router.ServeHTTP(metrics, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if !strings.Contains(metrics.Body.String(), "openrevenue_domain_context_rejections_total 1") {
 		t.Fatalf("domain-context metric missing: %s", metrics.Body)
+	}
+}
+
+func TestTaxpayerRegistrationHTTPVerticalSlice(t *testing.T) {
+	router := Router(app.New(nil))
+
+	createRequest := authorizedRequest(t, http.MethodPost, "/api/v1/taxpayers", `{"name":"Fictional Cooperative","identifier":"demo-401"}`)
+	createRequest.Header.Set("Idempotency-Key", "create-401")
+	created := httptest.NewRecorder()
+	router.ServeHTTP(created, createRequest)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body = %s", created.Code, created.Body)
+	}
+	var taxpayer struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &taxpayer); err != nil || taxpayer.ID == "" {
+		t.Fatalf("taxpayer response = %s, %v", created.Body, err)
+	}
+
+	submitted := httptest.NewRecorder()
+	router.ServeHTTP(submitted, authorizedRequest(
+		t, http.MethodPost,
+		fmt.Sprintf("/api/v1/taxpayers/%s/tax-registrations", taxpayer.ID),
+		`{"taxType":"SAMPLE_INCOME"}`,
+	))
+	if submitted.Code != http.StatusCreated || !strings.Contains(submitted.Body.String(), `"status":"SUBMITTED"`) {
+		t.Fatalf("submit status = %d body = %s", submitted.Code, submitted.Body)
+	}
+	var registration struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(submitted.Body.Bytes(), &registration); err != nil || registration.ID == "" {
+		t.Fatalf("registration response = %s, %v", submitted.Body, err)
+	}
+
+	approved := httptest.NewRecorder()
+	router.ServeHTTP(approved, authorizedRequest(
+		t, http.MethodPost,
+		fmt.Sprintf("/api/v1/tax-registrations/%s/approve", registration.ID), "",
+	))
+	if approved.Code != http.StatusOK || !strings.Contains(approved.Body.String(), `"status":"APPROVED"`) {
+		t.Fatalf("approve status = %d body = %s", approved.Code, approved.Body)
+	}
+
+	retrieved := httptest.NewRecorder()
+	router.ServeHTTP(retrieved, authorizedRequest(
+		t, http.MethodGet, fmt.Sprintf("/api/v1/tax-registrations/%s", registration.ID), "",
+	))
+	if retrieved.Code != http.StatusOK || !strings.Contains(retrieved.Body.String(), `"status":"APPROVED"`) {
+		t.Fatalf("retrieve status = %d body = %s", retrieved.Code, retrieved.Body)
+	}
+
+	repeatedApproval := httptest.NewRecorder()
+	router.ServeHTTP(repeatedApproval, authorizedRequest(
+		t, http.MethodPost,
+		fmt.Sprintf("/api/v1/tax-registrations/%s/approve", registration.ID), "",
+	))
+	if repeatedApproval.Code != http.StatusConflict {
+		t.Fatalf("second approval status = %d body = %s", repeatedApproval.Code, repeatedApproval.Body)
+	}
+	if repeatedApproval.Header().Get("Content-Type") != "application/problem+json" ||
+		strings.Contains(repeatedApproval.Body.String(), "only a submitted registration") {
+		t.Fatalf("unsafe problem response = %s", repeatedApproval.Body)
 	}
 }
