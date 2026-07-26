@@ -1,0 +1,177 @@
+:root {
+  color-scheme: light;
+  --or-color-ink: #17202a;
+  --or-color-muted: #536171;
+  --or-color-surface: #ffffff;
+  --or-color-canvas: #f3f6f8;
+  --or-color-border: #b7c2cd;
+  --or-color-brand: #075985;
+  --or-color-brand-strong: #0c4a6e;
+  --or-color-accent: #f0b429;
+  --or-color-danger: #a61b1b;
+  --or-color-success: #166534;
+  --or-focus: #f59e0b;
+  --or-space-1: 0.25rem;
+  --or-space-2: 0.5rem;
+  --or-space-3: 0.75rem;
+  --or-space-4: 1rem;
+  --or-space-6: 1.5rem;
+  --or-space-8: 2rem;
+  --or-radius: 0.375rem;
+  --or-shadow: 0 0.25rem 1rem rgb(23 32 42 / 10%);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--or-color-canvas);
+  color: var(--or-color-ink);
+  line-height: 1.5;
+}
+
+:where(a, button, input, select, textarea):focus-visible {
+  outline: 0.1875rem solid var(--or-focus);
+  outline-offset: 0.1875rem;
+}
+
+.or-button {
+  min-height: 2.75rem;
+  border: 0.125rem solid transparent;
+  border-radius: var(--or-radius);
+  padding: var(--or-space-2) var(--or-space-4);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.or-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.or-button--primary {
+  background: var(--or-color-brand);
+  color: white;
+}
+
+.or-button--primary:hover {
+  background: var(--or-color-brand-strong);
+}
+
+.or-button--secondary {
+  border-color: var(--or-color-brand);
+  background: white;
+  color: var(--or-color-brand-strong);
+}
+
+.or-button--danger {
+  background: var(--or-color-danger);
+  color: white;
+}
+
+.or-field {
+  display: grid;
+  max-width: 32rem;
+  gap: var(--or-space-1);
+}
+
+.or-field label {
+  font-weight: 700;
+}
+
+.or-field input {
+  min-height: 2.75rem;
+  border: 0.125rem solid var(--or-color-border);
+  border-radius: var(--or-radius);
+  padding: var(--or-space-2);
+  font: inherit;
+}
+
+.or-field input[aria-invalid="true"] {
+  border-color: var(--or-color-danger);
+}
+
+.or-field__hint {
+  color: var(--or-color-muted);
+}
+
+.or-field__error {
+  color: var(--or-color-danger);
+  font-weight: 700;
+}
+
+.or-alert {
+  border-inline-start: 0.35rem solid var(--or-color-brand);
+  background: #e0f2fe;
+  padding: var(--or-space-4);
+}
+
+.or-alert--success {
+  border-color: var(--or-color-success);
+  background: #dcfce7;
+}
+
+.or-alert--warning {
+  border-color: #854d0e;
+  background: #fef9c3;
+}
+
+.or-alert--danger {
+  border-color: var(--or-color-danger);
+  background: #fee2e2;
+}
+
+.or-state {
+  display: flex;
+  align-items: center;
+  gap: var(--or-space-3);
+}
+
+.or-spinner {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 0.2rem solid var(--or-color-border);
+  border-top-color: var(--or-color-brand);
+  border-radius: 50%;
+  animation: or-spin 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .or-spinner {
+    animation: none;
+  }
+}
+
+@keyframes or-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.or-empty {
+  border: 0.0625rem dashed var(--or-color-border);
+  border-radius: var(--or-radius);
+  padding: var(--or-space-6);
+  text-align: center;
+}
+
+.or-skip-link {
+  position: fixed;
+  z-index: 100;
+  top: var(--or-space-2);
+  left: var(--or-space-2);
+  transform: translateY(-200%);
+  background: white;
+  color: var(--or-color-brand-strong);
+  padding: var(--or-space-3);
+  font-weight: 700;
+}
+
+.or-skip-link:focus {
+  transform: translateY(0);
+}

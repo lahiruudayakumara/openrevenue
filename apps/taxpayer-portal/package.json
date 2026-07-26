@@ -23,11 +23,15 @@
         "zustand": "^5.0.5"
     },
     "devDependencies": {
+        "@testing-library/react": "16.3.2",
+        "@testing-library/user-event": "14.6.1",
         "@types/react": "^19.1.8",
         "@types/react-dom": "^19.1.6",
         "@vitejs/plugin-react": "^6.0.4",
+        "axe-core": "4.11.1",
+        "jsdom": "28.1.0",
+        "typescript": "^7.0.2",
         "vite": "^8.1.5",
-        "vitest": "^4.1.10",
-        "typescript": "^7.0.2"
+        "vitest": "^4.1.10"
     }
 }
