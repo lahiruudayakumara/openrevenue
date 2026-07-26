@@ -29,6 +29,11 @@ var (
 	returnSubmissionSuccesses       atomic.Uint64
 	returnAmendmentSuccesses        atomic.Uint64
 	returnLifecycleFailures         atomic.Uint64
+	assessmentPostingSuccesses      atomic.Uint64
+	paymentReceiptSuccesses         atomic.Uint64
+	paymentAllocationSuccesses      atomic.Uint64
+	ledgerReversalSuccesses         atomic.Uint64
+	financialSliceFailures          atomic.Uint64
 )
 
 func Router(s *app.Service) http.Handler {
@@ -71,7 +76,16 @@ func Router(s *app.Service) http.Handler {
 				"openrevenue_return_lifecycle_success_total{operation=\"amend\"} %d\n"+
 				"# HELP openrevenue_return_lifecycle_failures_total Safe return lifecycle request failures.\n"+
 				"# TYPE openrevenue_return_lifecycle_failures_total counter\n"+
-				"openrevenue_return_lifecycle_failures_total %d\n",
+				"openrevenue_return_lifecycle_failures_total %d\n"+
+				"# HELP openrevenue_financial_posting_success_total Successful assessment, payment, allocation, and reversal operations.\n"+
+				"# TYPE openrevenue_financial_posting_success_total counter\n"+
+				"openrevenue_financial_posting_success_total{operation=\"assessment\"} %d\n"+
+				"openrevenue_financial_posting_success_total{operation=\"payment_receipt\"} %d\n"+
+				"openrevenue_financial_posting_success_total{operation=\"payment_allocation\"} %d\n"+
+				"openrevenue_financial_posting_success_total{operation=\"ledger_reversal\"} %d\n"+
+				"# HELP openrevenue_financial_slice_failures_total Safe financial-slice request failures.\n"+
+				"# TYPE openrevenue_financial_slice_failures_total counter\n"+
+				"openrevenue_financial_slice_failures_total %d\n",
 			mw.RejectedDomainContexts(),
 			taxpayerCreateSuccesses.Load(),
 			taxRegistrationSubmitSuccesses.Load(),
@@ -83,6 +97,11 @@ func Router(s *app.Service) http.Handler {
 			returnSubmissionSuccesses.Load(),
 			returnAmendmentSuccesses.Load(),
 			returnLifecycleFailures.Load(),
+			assessmentPostingSuccesses.Load(),
+			paymentReceiptSuccesses.Load(),
+			paymentAllocationSuccesses.Load(),
+			ledgerReversalSuccesses.Load(),
+			financialSliceFailures.Load(),
 		)
 	})
 	r.Group(func(r chi.Router) {
@@ -101,7 +120,11 @@ func Router(s *app.Service) http.Handler {
 			r.Post("/returns/{returnID}/amend", h.amend)
 			r.Get("/returns/{returnID}/history", h.returnHistory)
 			r.Post("/payments", h.payment)
+			r.Get("/payments/{paymentID}", h.getPayment)
+			r.Post("/payments/{paymentID}/allocations", h.allocatePayment)
+			r.Get("/assessments/{assessmentID}", h.getAssessment)
 			r.Get("/taxpayers/{taxpayerID}/ledger", h.ledger)
+			r.Post("/ledger/postings/{postingID}/reverse", h.reversePosting)
 			r.Get("/admin/audit-events", h.audits)
 		})
 	})
@@ -275,10 +298,12 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	v, err := h.s.SubmitAndAssess(r.Context(), requestContext(r), chi.URLParam(r, "returnID"))
 	if err != nil {
 		returnLifecycleFailures.Add(1)
+		financialSliceFailures.Add(1)
 		writeApplicationError(w, r, "Submission failed", err)
 		return
 	}
 	returnSubmissionSuccesses.Add(1)
+	assessmentPostingSuccesses.Add(1)
 	write(w, 201, v)
 }
 
@@ -313,34 +338,111 @@ func (h *Handler) payment(w http.ResponseWriter, r *http.Request) {
 	}
 	currency, err := foundation.NewCurrency(in.Currency, 2)
 	if err != nil {
-		problem.Write(w, r, 422, "Payment failed", err)
+		writeApplicationError(w, r, "Payment failed", err)
 		return
 	}
 	amount, err := foundation.NewMoney(in.AmountMinor, currency)
 	if err != nil {
-		problem.Write(w, r, 422, "Payment failed", err)
+		writeApplicationError(w, r, "Payment failed", err)
 		return
 	}
-	v, err := h.s.RecordPayment(requestContext(r), in.TaxpayerID, in.AssessmentID, amount)
+	key := r.Header.Get("Idempotency-Key")
+	if key == "" {
+		problem.Write(w, r, http.StatusBadRequest, "Idempotency key required", nil)
+		return
+	}
+	v, err := h.s.RecordPaymentIdempotent(
+		requestContext(r), in.TaxpayerID, in.AssessmentID, amount, key,
+	)
 	if err != nil {
-		problem.Write(w, r, 422, "Payment failed", err)
+		financialSliceFailures.Add(1)
+		writeApplicationError(w, r, "Payment failed", err)
 		return
 	}
+	paymentReceiptSuccesses.Add(1)
 	write(w, 201, v)
 }
+
+func (h *Handler) getPayment(w http.ResponseWriter, r *http.Request) {
+	value, err := h.s.GetPayment(requestContext(r), chi.URLParam(r, "paymentID"))
+	if err != nil {
+		writeApplicationError(w, r, "Payment query failed", err)
+		return
+	}
+	write(w, http.StatusOK, value)
+}
+
+func (h *Handler) allocatePayment(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		AssessmentID    string `json:"assessmentId"`
+		AmountMinor     int64  `json:"amountMinor"`
+		Currency        string `json:"currency"`
+		ExpectedVersion uint64 `json:"expectedVersion"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	currency, err := foundation.NewCurrency(in.Currency, 2)
+	if err != nil {
+		financialSliceFailures.Add(1)
+		writeApplicationError(w, r, "Allocation failed", err)
+		return
+	}
+	paymentAllocationSuccesses.Add(1)
+	amount, err := foundation.NewMoney(in.AmountMinor, currency)
+	if err != nil {
+		writeApplicationError(w, r, "Allocation failed", err)
+		return
+	}
+	value, err := h.s.AllocatePayment(
+		requestContext(r), chi.URLParam(r, "paymentID"), in.AssessmentID,
+		amount, in.ExpectedVersion,
+	)
+	if err != nil {
+		writeApplicationError(w, r, "Allocation failed", err)
+		return
+	}
+	write(w, http.StatusOK, value)
+}
+
+func (h *Handler) getAssessment(w http.ResponseWriter, r *http.Request) {
+	value, err := h.s.GetAssessment(requestContext(r), chi.URLParam(r, "assessmentID"))
+	if err != nil {
+		writeApplicationError(w, r, "Assessment query failed", err)
+		return
+	}
+	write(w, http.StatusOK, value)
+}
+
 func (h *Handler) ledger(w http.ResponseWriter, r *http.Request) {
 	scope := requestContext(r)
 	entries, err := h.s.Ledger(scope, chi.URLParam(r, "taxpayerID"))
 	if err != nil {
-		problem.Write(w, r, 422, "Ledger query failed", err)
+		writeApplicationError(w, r, "Ledger query failed", err)
 		return
 	}
 	asOf, err := h.s.CurrentTime(scope)
 	if err != nil {
-		problem.Write(w, r, 422, "Ledger query failed", err)
+		writeApplicationError(w, r, "Ledger query failed", err)
 		return
 	}
-	write(w, 200, map[string]any{"entries": entries, "asOf": asOf})
+	balance, err := h.s.LedgerBalance(scope, chi.URLParam(r, "taxpayerID"))
+	if err != nil {
+		writeApplicationError(w, r, "Ledger query failed", err)
+		return
+	}
+	write(w, 200, map[string]any{"entries": entries, "balance": balance, "asOf": asOf})
+}
+
+func (h *Handler) reversePosting(w http.ResponseWriter, r *http.Request) {
+	value, err := h.s.ReversePosting(requestContext(r), chi.URLParam(r, "postingID"))
+	if err != nil {
+		financialSliceFailures.Add(1)
+		writeApplicationError(w, r, "Ledger reversal failed", err)
+		return
+	}
+	ledgerReversalSuccesses.Add(1)
+	write(w, http.StatusCreated, value)
 }
 func (h *Handler) audits(w http.ResponseWriter, r *http.Request) {
 	events, err := h.s.Audits(requestContext(r))

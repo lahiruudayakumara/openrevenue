@@ -96,11 +96,13 @@ func TestVerticalSliceUsesCanonicalContextMoneyAndClock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 {
+	if len(entries) != 6 {
 		t.Fatalf("entries = %d", len(entries))
 	}
-	if entries[0].PostedAt != clock.Now() || entries[1].PostedAt != clock.Now() {
-		t.Fatal("ledger did not use the injected clock")
+	for _, entry := range entries {
+		if entry.PostedAt != clock.Now() {
+			t.Fatal("ledger did not use the injected clock")
+		}
 	}
 	events, err := s.Audits(admin)
 	if err != nil {

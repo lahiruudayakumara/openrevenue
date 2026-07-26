@@ -47,21 +47,49 @@ type idempotencyRecord struct {
 	Taxpayer    Taxpayer
 }
 
+type paymentIdempotencyRecord struct {
+	Fingerprint [32]byte
+	PaymentID   string
+}
+
 type Assessment struct {
 	ID           id.ID[AssessmentTag] `json:"id"`
 	TenantID     string               `json:"tenantId"`
 	Jurisdiction string               `json:"jurisdiction"`
 	ReturnID     string               `json:"returnId"`
 	Amount       ledger.Money         `json:"amount"`
+	Outstanding  ledger.Money         `json:"outstanding"`
+	PostingID    ledger.PostingID     `json:"postingId"`
+}
+
+type Allocation struct {
+	AssessmentID  string           `json:"assessmentId"`
+	Amount        ledger.Money     `json:"amount"`
+	PostingID     ledger.PostingID `json:"postingId"`
+	AllocatedAt   time.Time        `json:"allocatedAt"`
+	ActorID       string           `json:"actorId"`
+	CorrelationID string           `json:"correlationId"`
 }
 
 type Payment struct {
-	ID           id.ID[PaymentTag] `json:"id"`
-	TenantID     string            `json:"tenantId"`
-	Jurisdiction string            `json:"jurisdiction"`
-	TaxpayerID   string            `json:"taxpayerId"`
-	Amount       ledger.Money      `json:"amount"`
-	AllocatedTo  string            `json:"allocatedTo"`
+	ID               id.ID[PaymentTag] `json:"id"`
+	TenantID         string            `json:"tenantId"`
+	Jurisdiction     string            `json:"jurisdiction"`
+	TaxpayerID       string            `json:"taxpayerId"`
+	Amount           ledger.Money      `json:"amount"`
+	Allocated        ledger.Money      `json:"allocated"`
+	Unapplied        ledger.Money      `json:"unapplied"`
+	Status           string            `json:"status"`
+	Version          uint64            `json:"version"`
+	ReceiptPostingID ledger.PostingID  `json:"receiptPostingId"`
+	Allocations      []Allocation      `json:"allocations"`
+}
+
+type LedgerBalance struct {
+	Currency        string `json:"currency"`
+	ReceivableMinor int64  `json:"receivableMinor"`
+	UnappliedMinor  int64  `json:"unappliedMinor"`
+	NetDueMinor     int64  `json:"netDueMinor"`
 }
 
 type Notification struct{ To, Subject, Body string }
@@ -71,21 +99,26 @@ type Notifier interface {
 }
 
 type Service struct {
-	mu            sync.RWMutex
-	clock         foundation.Clock
-	notifier      Notifier
-	taxpayers     map[string]Taxpayer
-	registrations map[string]Registration
-	returns       map[string]filing.TaxReturn
-	assessments   map[string]Assessment
-	payments      map[string]Payment
-	entries       []ledger.Entry
-	audits        []audit.Event
-	events        []event.Event
-	idempotency   map[string]idempotencyRecord
-	identifiers   map[string]string
-	authorizer    Authorizer
-	calculator    calculation.Calculator
+	mu                 sync.RWMutex
+	clock              foundation.Clock
+	notifier           Notifier
+	taxpayers          map[string]Taxpayer
+	registrations      map[string]Registration
+	returns            map[string]filing.TaxReturn
+	assessments        map[string]Assessment
+	payments           map[string]Payment
+	entries            []ledger.Entry
+	postings           map[string]ledger.Posting
+	postingRefs        map[string]string
+	reversedPostings   map[string]string
+	assessmentByReturn map[string]string
+	audits             []audit.Event
+	events             []event.Event
+	idempotency        map[string]idempotencyRecord
+	paymentIdempotency map[string]paymentIdempotencyRecord
+	identifiers        map[string]string
+	authorizer         Authorizer
+	calculator         calculation.Calculator
 }
 
 func New(notifier Notifier) *Service {
@@ -107,8 +140,11 @@ func NewWithDependencies(notifier Notifier, clock foundation.Clock, authorizer A
 		clock: clock, notifier: notifier, taxpayers: map[string]Taxpayer{},
 		registrations: map[string]Registration{}, returns: map[string]filing.TaxReturn{},
 		assessments: map[string]Assessment{}, payments: map[string]Payment{},
+		postings: map[string]ledger.Posting{}, postingRefs: map[string]string{},
+		reversedPostings: map[string]string{}, assessmentByReturn: map[string]string{},
 		idempotency: map[string]idempotencyRecord{}, identifiers: map[string]string{},
-		authorizer: authorizer,
+		paymentIdempotency: map[string]paymentIdempotencyRecord{},
+		authorizer:         authorizer,
 		calculator: calculation.FlatRateCalculator{
 			RuleVersion: filing.DefaultRuleVersion, RateBPS: 1_000,
 		},
@@ -450,7 +486,12 @@ func (s *Service) SubmitAndAssess(
 	taxReturn, ok := s.returns[key]
 	if !ok {
 		s.mu.Unlock()
-		return Assessment{}, errors.New("return not found")
+		return Assessment{}, ErrNotFound
+	}
+	if assessmentID, exists := s.assessmentByReturn[key]; exists {
+		assessment := s.assessments[scope.IsolationKey(assessmentID)]
+		s.mu.Unlock()
+		return assessment, nil
 	}
 	now := s.clock.Now()
 	if err := taxReturn.Submit(now, filing.DefaultFormVersion, filing.DefaultRuleVersion); err != nil {
@@ -460,24 +501,29 @@ func (s *Service) SubmitAndAssess(
 	amount := taxReturn.Calculation.Amount
 	assessment := Assessment{
 		ID: id.New[AssessmentTag](), TenantID: scope.Tenant().String(),
-		Jurisdiction: scope.Jurisdiction().String(), ReturnID: returnID, Amount: amount,
+		Jurisdiction: scope.Jurisdiction().String(), ReturnID: returnID,
+		Amount: amount, Outstanding: amount,
 	}
-	entry, err := ledger.NewEntry(
-		scope, ledger.AssessmentDebit, ledger.TaxpayerID(taxReturn.TaxpayerID),
+	posting, err := ledger.NewAssessmentPosting(
+		scope, ledger.TaxpayerID(taxReturn.TaxpayerID),
 		ledger.RegistrationID(taxReturn.RegistrationID), ledger.PeriodID(taxReturn.PeriodID),
-		amount, "ASSESSMENT", assessment.ID.String(), now,
+		amount, assessment.ID.String(), now,
 	)
 	if err != nil {
 		s.mu.Unlock()
 		return Assessment{}, err
 	}
+	assessment.PostingID = posting.ID
 	s.returns[key] = taxReturn
 	s.assessments[scope.IsolationKey(assessment.ID.String())] = assessment
-	s.entries = append(s.entries, entry)
+	s.assessmentByReturn[key] = assessment.ID.String()
+	s.postings[scope.IsolationKey(posting.ID.String())] = posting
+	s.postingRefs[scope.IsolationKey(posting.ReferenceType+":"+posting.ReferenceID)] = posting.ID.String()
+	s.entries = append(s.entries, posting.Entries...)
 	for _, event := range []struct{ action, kind, id string }{
 		{"ReturnSubmitted", "return", returnID},
 		{"AssessmentCreated", "assessment", assessment.ID.String()},
-		{"LedgerEntryPosted", "ledger_entry", entry.ID.String()},
+		{"LedgerEntryPosted", "ledger_posting", posting.ID.String()},
 	} {
 		if err := s.record(scope, event.action, event.kind, event.id); err != nil {
 			s.mu.Unlock()
@@ -487,6 +533,18 @@ func (s *Service) SubmitAndAssess(
 	if err := s.emit(scope, "ReturnSubmitted", "return", returnID, map[string]string{
 		"formVersion": taxReturn.FormVersion, "ruleVersion": taxReturn.RuleVersion,
 		"payloadHash": taxReturn.FrozenPayloadHash,
+	}); err != nil {
+		s.mu.Unlock()
+		return Assessment{}, err
+	}
+	if err := s.emit(scope, "AssessmentCreated", "assessment", assessment.ID.String(), map[string]string{
+		"returnId": returnID, "postingId": posting.ID.String(),
+	}); err != nil {
+		s.mu.Unlock()
+		return Assessment{}, err
+	}
+	if err := s.emit(scope, "LedgerEntryPosted", "ledger_posting", posting.ID.String(), map[string]string{
+		"sourceType": "ASSESSMENT", "sourceId": assessment.ID.String(),
 	}); err != nil {
 		s.mu.Unlock()
 		return Assessment{}, err
@@ -572,6 +630,29 @@ func (s *Service) RecordPayment(
 	assessmentID string,
 	amount ledger.Money,
 ) (Payment, error) {
+	return s.recordPayment(scope, taxpayerID, assessmentID, amount, "")
+}
+
+func (s *Service) RecordPaymentIdempotent(
+	scope foundation.Context,
+	taxpayerID string,
+	assessmentID string,
+	amount ledger.Money,
+	idempotencyKey string,
+) (Payment, error) {
+	if idempotencyKey == "" || len(idempotencyKey) > 128 {
+		return Payment{}, errors.New("idempotency key must contain 1-128 characters")
+	}
+	return s.recordPayment(scope, taxpayerID, assessmentID, amount, idempotencyKey)
+}
+
+func (s *Service) recordPayment(
+	scope foundation.Context,
+	taxpayerID string,
+	assessmentID string,
+	amount ledger.Money,
+	idempotencyKey string,
+) (Payment, error) {
 	if err := scope.Validate(); err != nil {
 		return Payment{}, err
 	}
@@ -581,48 +662,210 @@ func (s *Service) RecordPayment(
 	if amount.Minor() <= 0 {
 		return Payment{}, errors.New("payment amount must be positive")
 	}
+	if err := s.authorize(scope, "payment:record", taxpayerID); err != nil {
+		return Payment{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	assessment, ok := s.assessments[scope.IsolationKey(assessmentID)]
-	if !ok {
-		return Payment{}, errors.New("assessment not found")
+	var fingerprint [32]byte
+	idempotencyStorageKey := ""
+	if idempotencyKey != "" {
+		fingerprint = sha256.Sum256([]byte(fmt.Sprintf(
+			"%s\x00%s\x00%d\x00%s",
+			taxpayerID, assessmentID, amount.Minor(), amount.Currency().Code(),
+		)))
+		idempotencyStorageKey = scope.IsolationKey("payment-idempotency:" + idempotencyKey)
+		if record, exists := s.paymentIdempotency[idempotencyStorageKey]; exists {
+			if record.Fingerprint != fingerprint {
+				return Payment{}, fmt.Errorf("%w: idempotency key was already used for another payment", ErrConflict)
+			}
+			return s.payments[scope.IsolationKey(record.PaymentID)], nil
+		}
 	}
-	taxReturn := s.returns[scope.IsolationKey(assessment.ReturnID)]
-	if taxReturn.TaxpayerID != taxpayerID {
-		return Payment{}, errors.New("assessment does not belong to taxpayer")
+	if _, ok := s.taxpayers[scope.IsolationKey(taxpayerID)]; !ok {
+		return Payment{}, ErrNotFound
 	}
-	if amount.Currency() != assessment.Amount.Currency() {
-		return Payment{}, foundation.ErrCurrencyMismatch
-	}
+	zero, _ := foundation.NewMoney(0, amount.Currency())
 	payment := Payment{
 		ID: id.New[PaymentTag](), TenantID: scope.Tenant().String(),
 		Jurisdiction: scope.Jurisdiction().String(), TaxpayerID: taxpayerID,
-		Amount: amount, AllocatedTo: assessmentID,
+		Amount: amount, Allocated: zero, Unapplied: amount,
+		Status: "UNAPPLIED", Version: 1, Allocations: []Allocation{},
 	}
-	entry, err := ledger.NewEntry(
-		scope, ledger.PaymentCredit, ledger.TaxpayerID(taxReturn.TaxpayerID),
-		ledger.RegistrationID(taxReturn.RegistrationID), ledger.PeriodID(taxReturn.PeriodID),
-		amount, "PAYMENT", payment.ID.String(), s.clock.Now(),
+	if assessmentID != "" {
+		assessment, ok := s.assessments[scope.IsolationKey(assessmentID)]
+		if !ok || assessment.Outstanding.IsZero() {
+			return Payment{}, ErrNotFound
+		}
+		taxReturn := s.returns[scope.IsolationKey(assessment.ReturnID)]
+		if taxReturn.TaxpayerID != taxpayerID {
+			return Payment{}, ErrNotFound
+		}
+		if assessment.Amount.Currency() != amount.Currency() {
+			return Payment{}, foundation.ErrCurrencyMismatch
+		}
+	}
+	receipt, err := ledger.NewPaymentReceiptPosting(
+		scope, ledger.TaxpayerID(taxpayerID), amount, payment.ID.String(), s.clock.Now(),
 	)
 	if err != nil {
 		return Payment{}, err
 	}
+	payment.ReceiptPostingID = receipt.ID
+	s.postings[scope.IsolationKey(receipt.ID.String())] = receipt
+	s.entries = append(s.entries, receipt.Entries...)
+	if assessmentID != "" {
+		if err := s.allocatePaymentLocked(scope, &payment, assessmentID, amount, payment.Version); err != nil {
+			return Payment{}, err
+		}
+	}
 	s.payments[scope.IsolationKey(payment.ID.String())] = payment
-	s.entries = append(s.entries, entry)
+	if idempotencyStorageKey != "" {
+		s.paymentIdempotency[idempotencyStorageKey] = paymentIdempotencyRecord{
+			Fingerprint: fingerprint, PaymentID: payment.ID.String(),
+		}
+	}
 	for _, event := range []struct{ action, kind, id string }{
 		{"PaymentReceived", "payment", payment.ID.String()},
-		{"PaymentAllocated", "assessment", assessmentID},
-		{"LedgerEntryPosted", "ledger_entry", entry.ID.String()},
+		{"LedgerEntryPosted", "ledger_posting", receipt.ID.String()},
 	} {
 		if err := s.record(scope, event.action, event.kind, event.id); err != nil {
 			return Payment{}, err
 		}
 	}
+	if err := s.emit(scope, "PaymentReceived", "payment", payment.ID.String(), map[string]string{
+		"postingId": receipt.ID.String(),
+	}); err != nil {
+		return Payment{}, err
+	}
+	if err := s.emit(scope, "LedgerEntryPosted", "ledger_posting", receipt.ID.String(), map[string]string{
+		"sourceType": "PAYMENT_RECEIPT", "sourceId": payment.ID.String(),
+	}); err != nil {
+		return Payment{}, err
+	}
 	return payment, nil
+}
+
+func (s *Service) AllocatePayment(
+	scope foundation.Context,
+	paymentID string,
+	assessmentID string,
+	amount ledger.Money,
+	expectedVersion uint64,
+) (Payment, error) {
+	if err := scope.Validate(); err != nil {
+		return Payment{}, err
+	}
+	if err := s.authorize(scope, "payment:allocate", paymentID); err != nil {
+		return Payment{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scope.IsolationKey(paymentID)
+	payment, ok := s.payments[key]
+	if !ok {
+		return Payment{}, ErrNotFound
+	}
+	if err := s.allocatePaymentLocked(scope, &payment, assessmentID, amount, expectedVersion); err != nil {
+		return Payment{}, err
+	}
+	s.payments[key] = payment
+	return payment, nil
+}
+
+func (s *Service) allocatePaymentLocked(
+	scope foundation.Context,
+	payment *Payment,
+	assessmentID string,
+	requested ledger.Money,
+	expectedVersion uint64,
+) error {
+	if payment.Version != expectedVersion {
+		return fmt.Errorf("%w: payment allocation version is stale", ErrConflict)
+	}
+	if err := requested.Validate(); err != nil {
+		return err
+	}
+	if requested.Minor() <= 0 || requested.Currency() != payment.Amount.Currency() {
+		return errors.New("allocation amount must be positive and use the payment currency")
+	}
+	assessmentKey := scope.IsolationKey(assessmentID)
+	assessment, ok := s.assessments[assessmentKey]
+	if !ok {
+		return ErrNotFound
+	}
+	taxReturn := s.returns[scope.IsolationKey(assessment.ReturnID)]
+	if taxReturn.TaxpayerID != payment.TaxpayerID {
+		return ErrNotFound
+	}
+	if requested.Currency() != assessment.Amount.Currency() {
+		return foundation.ErrCurrencyMismatch
+	}
+	minor := requested.Minor()
+	if minor > payment.Unapplied.Minor() {
+		minor = payment.Unapplied.Minor()
+	}
+	if minor > assessment.Outstanding.Minor() {
+		minor = assessment.Outstanding.Minor()
+	}
+	if minor <= 0 {
+		return fmt.Errorf("%w: no amount remains available for allocation", ErrConflict)
+	}
+	allocated, _ := foundation.NewMoney(minor, requested.Currency())
+	posting, err := ledger.NewPaymentAllocationPosting(
+		scope, ledger.TaxpayerID(payment.TaxpayerID),
+		ledger.RegistrationID(taxReturn.RegistrationID), ledger.PeriodID(taxReturn.PeriodID),
+		allocated, fmt.Sprintf("%s:v%d", payment.ID.String(), payment.Version+1), s.clock.Now(),
+	)
+	if err != nil {
+		return err
+	}
+	nextAllocated, err := payment.Allocated.Add(allocated)
+	if err != nil {
+		return err
+	}
+	nextUnapplied, err := payment.Unapplied.Subtract(allocated)
+	if err != nil {
+		return err
+	}
+	nextOutstanding, err := assessment.Outstanding.Subtract(allocated)
+	if err != nil {
+		return err
+	}
+	payment.Allocated = nextAllocated
+	payment.Unapplied = nextUnapplied
+	assessment.Outstanding = nextOutstanding
+	payment.Version++
+	payment.Allocations = append(payment.Allocations, Allocation{
+		AssessmentID: assessmentID, Amount: allocated, PostingID: posting.ID,
+		AllocatedAt: s.clock.Now().UTC(), ActorID: scope.Actor().ID(),
+		CorrelationID: scope.CorrelationID().String(),
+	})
+	switch {
+	case payment.Unapplied.IsZero():
+		payment.Status = "ALLOCATED"
+	default:
+		payment.Status = "PARTIALLY_ALLOCATED"
+	}
+	s.assessments[assessmentKey] = assessment
+	s.postings[scope.IsolationKey(posting.ID.String())] = posting
+	s.entries = append(s.entries, posting.Entries...)
+	if err := s.record(scope, "PaymentAllocated", "payment", payment.ID.String()); err != nil {
+		return err
+	}
+	if err := s.emit(scope, "PaymentAllocated", "payment", payment.ID.String(), map[string]string{
+		"assessmentId": assessmentID, "postingId": posting.ID.String(),
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Service) Ledger(scope foundation.Context, taxpayerID string) ([]ledger.Entry, error) {
 	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	if err := s.authorize(scope, "ledger:read", taxpayerID); err != nil {
 		return nil, err
 	}
 	s.mu.RLock()
@@ -639,6 +882,115 @@ func (s *Service) Ledger(scope foundation.Context, taxpayerID string) ([]ledger.
 		return entries[i].PostedAt.Before(entries[j].PostedAt)
 	})
 	return entries, nil
+}
+
+func (s *Service) LedgerBalance(scope foundation.Context, taxpayerID string) (LedgerBalance, error) {
+	entries, err := s.Ledger(scope, taxpayerID)
+	if err != nil {
+		return LedgerBalance{}, err
+	}
+	currency, err := foundation.NewCurrency("XCR", 2)
+	if err != nil {
+		return LedgerBalance{}, err
+	}
+	receivable, _ := foundation.NewMoney(0, currency)
+	unapplied, _ := foundation.NewMoney(0, currency)
+	for _, entry := range entries {
+		switch entry.Account {
+		case ledger.TaxpayerReceivable:
+			receivable, err = receivable.Add(entry.Debit)
+			if err == nil {
+				receivable, err = receivable.Subtract(entry.Credit)
+			}
+		case ledger.UnappliedCash:
+			unapplied, err = unapplied.Add(entry.Credit)
+			if err == nil {
+				unapplied, err = unapplied.Subtract(entry.Debit)
+			}
+		}
+		if err != nil {
+			return LedgerBalance{}, err
+		}
+	}
+	net, err := receivable.Subtract(unapplied)
+	if err != nil {
+		return LedgerBalance{}, err
+	}
+	balance := LedgerBalance{
+		Currency: currency.Code(), ReceivableMinor: receivable.Minor(),
+		UnappliedMinor: unapplied.Minor(), NetDueMinor: net.Minor(),
+	}
+	return balance, nil
+}
+
+func (s *Service) GetAssessment(scope foundation.Context, assessmentID string) (Assessment, error) {
+	if err := scope.Validate(); err != nil {
+		return Assessment{}, err
+	}
+	if err := s.authorize(scope, "assessment:read", assessmentID); err != nil {
+		return Assessment{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	value, ok := s.assessments[scope.IsolationKey(assessmentID)]
+	if !ok {
+		return Assessment{}, ErrNotFound
+	}
+	return value, nil
+}
+
+func (s *Service) GetPayment(scope foundation.Context, paymentID string) (Payment, error) {
+	if err := scope.Validate(); err != nil {
+		return Payment{}, err
+	}
+	if err := s.authorize(scope, "payment:read", paymentID); err != nil {
+		return Payment{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	value, ok := s.payments[scope.IsolationKey(paymentID)]
+	if !ok {
+		return Payment{}, ErrNotFound
+	}
+	return value, nil
+}
+
+func (s *Service) ReversePosting(
+	scope foundation.Context,
+	postingID string,
+) (ledger.Posting, error) {
+	if err := scope.Validate(); err != nil {
+		return ledger.Posting{}, err
+	}
+	if err := s.authorize(scope, "ledger:reverse", postingID); err != nil {
+		return ledger.Posting{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scope.IsolationKey(postingID)
+	original, ok := s.postings[key]
+	if !ok {
+		return ledger.Posting{}, ErrNotFound
+	}
+	if _, exists := s.reversedPostings[key]; exists || original.ReversalOf != nil {
+		return ledger.Posting{}, fmt.Errorf("%w: posting is already a reversal or has been reversed", ErrConflict)
+	}
+	reversal, err := ledger.NewReversalPosting(scope, original, s.clock.Now())
+	if err != nil {
+		return ledger.Posting{}, err
+	}
+	s.postings[scope.IsolationKey(reversal.ID.String())] = reversal
+	s.reversedPostings[key] = reversal.ID.String()
+	s.entries = append(s.entries, reversal.Entries...)
+	if err := s.record(scope, "LedgerPostingReversed", "ledger_posting", reversal.ID.String()); err != nil {
+		return ledger.Posting{}, err
+	}
+	if err := s.emit(scope, "LedgerPostingReversed", "ledger_posting", reversal.ID.String(), map[string]string{
+		"reversalOf": original.ID.String(),
+	}); err != nil {
+		return ledger.Posting{}, err
+	}
+	return reversal, nil
 }
 
 func (s *Service) Audits(scope foundation.Context) ([]audit.Event, error) {
