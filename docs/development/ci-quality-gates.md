@@ -76,3 +76,9 @@ Caches are disposable performance aids. If corruption is suspected, rerun with
 the cache removed or a changed cache key; never loosen a gate to make a run pass.
 Workflow artifacts expire after the configured retention period, while release
 assets and attestations follow the release retention policy.
+
+The contract job also verifies router coverage, unique operation IDs, RFC 9457
+error shapes, JSON Schema references and examples, generated-client
+reproducibility, TypeScript compilation, and backward compatibility with the
+pull request base commit. A breaking contract requires an explicitly versioned
+migration decision, not an exception to the job.
