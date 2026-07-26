@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
           version: 10.14.0
@@ -32,3 +34,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Validate OpenAPI and event JSON Schemas
         run: make contracts
+      - name: Detect breaking contract changes
+        if: github.event_name == 'pull_request'
+        env:
+          CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: pnpm contracts:compat

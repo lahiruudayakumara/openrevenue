@@ -110,5 +110,5 @@ seed: ## Load fictional development seed data
 	@test -n "$${DATABASE_URL:-}" || { echo "DATABASE_URL is required; source .env first." >&2; exit 1; }
 	psql "$${DATABASE_URL}" -f database/seeds/development.sql
 
-generate: ## Generate contract and query clients
-	@echo "Run oapi-codegen, sqlc, and the TypeScript OpenAPI generator in tools/codegen"
+generate: ## Generate reproducible contract clients
+	corepack pnpm contracts:generate
