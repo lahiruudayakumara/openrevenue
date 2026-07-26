@@ -160,6 +160,15 @@ func (s *Service) SetCalculator(calculator calculation.Calculator) {
 	s.calculator = calculator
 }
 
+func (s *Service) SetCalculator(calculator calculation.Calculator) {
+	if calculator == nil {
+		panic("calculator is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calculator = calculator
+}
+
 func (s *Service) record(scope foundation.Context, action, kind, resourceID string) error {
 	event, err := audit.New(scope, action, kind, resourceID, s.clock.Now())
 	if err != nil {
