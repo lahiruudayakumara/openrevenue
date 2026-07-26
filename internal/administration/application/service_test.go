@@ -61,6 +61,10 @@ func TestVerticalSliceUsesCanonicalContextMoneyAndClock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	registration, err = s.ApproveRegistration(officer, registration.ID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
 	taxReturn, err := s.DraftReturn(
 		taxpayerActor,
 		taxpayer.ID.String(),
@@ -147,6 +151,7 @@ func TestPaymentRejectsCurrencyMixing(t *testing.T) {
 	requestScope := scope(t, "revenue", "LK", "officer")
 	taxpayer, _ := s.CreateTaxpayer(requestScope, "Synthetic Taxpayer", "SYN-002", "key")
 	registration, _ := s.Register(requestScope, taxpayer.ID.String(), "SAMPLE")
+	registration, _ = s.ApproveRegistration(requestScope, registration.ID.String())
 	taxReturn, _ := s.DraftReturn(
 		requestScope,
 		taxpayer.ID.String(),
