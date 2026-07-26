@@ -26,3 +26,9 @@ labels. Alert on a sustained increase in
 `openrevenue_return_lifecycle_failures_total`. Calculation explanations and
 payload hashes may be retained with the return, but raw return lines and
 validation inputs must not be emitted to logs, traces, or metric labels.
+
+Financial-slice metrics report assessment posting, payment receipt, allocation,
+and ledger reversal outcomes with fixed operation labels. Alert on
+`openrevenue_financial_slice_failures_total`, stale allocation conflicts, and
+imbalanced-posting rejections. Never emit payment references, source document
+contents, taxpayer identifiers, amounts, or account balances as metric labels.
