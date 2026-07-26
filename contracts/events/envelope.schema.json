@@ -34,6 +34,7 @@
         "PaymentReceived",
         "PaymentAllocated",
         "LedgerEntryPosted",
+        "LedgerPostingReversed",
         "DocumentUploaded",
         "NotificationRequested",
         "AuditEventRecorded"

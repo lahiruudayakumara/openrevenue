@@ -314,6 +314,7 @@ paths:
       summary: Record a payment
       description: Record and allocate a revenue payment.
       tags: [Payments]
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody:
         required: true
         content:
@@ -333,6 +334,59 @@ paths:
           "401": { $ref: "#/components/responses/Unauthorized" },
           default: { $ref: "#/components/responses/Problem" },
         }
+  /payments/{paymentId}:
+    parameters: *domainContext
+    get:
+      operationId: getPayment
+      summary: Retrieve payment allocation state
+      tags: [Payments]
+      parameters: [{ $ref: "#/components/parameters/PaymentId" }]
+      responses:
+        "200":
+          description: Payment state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/Problem" }
+        default: { $ref: "#/components/responses/Problem" }
+  /payments/{paymentId}/allocations:
+    parameters: *domainContext
+    post:
+      operationId: allocatePayment
+      summary: Allocate available payment credit using optimistic concurrency
+      tags: [Payments]
+      parameters: [{ $ref: "#/components/parameters/PaymentId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AllocatePayment" }
+      responses:
+        "200":
+          description: Updated payment state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Problem" }
+        default: { $ref: "#/components/responses/Problem" }
+  /assessments/{assessmentId}:
+    parameters: *domainContext
+    get:
+      operationId: getAssessment
+      summary: Retrieve an assessment and outstanding balance
+      tags: [Payments]
+      parameters: [{ $ref: "#/components/parameters/AssessmentId" }]
+      responses:
+        "200":
+          description: Assessment state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Assessment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/Problem" }
+        default: { $ref: "#/components/responses/Problem" }
   /taxpayers/{taxpayerId}/ledger:
     parameters: *domainContext
     get:
@@ -351,10 +405,34 @@ paths:
         ]
       responses:
         {
-          "200": { description: Append-only ledger },
+          "200":
+            {
+              description: Balanced append-only ledger and projected balances,
+              content:
+                {
+                  application/json:
+                    { schema: { $ref: "#/components/schemas/LedgerResponse" } },
+                },
+            },
           "401": { $ref: "#/components/responses/Unauthorized" },
           default: { $ref: "#/components/responses/Problem" },
         }
+  /ledger/postings/{postingId}/reverse:
+    parameters: *domainContext
+    post:
+      operationId: reverseLedgerPosting
+      summary: Append a balanced reversal for an existing posting
+      tags: [Ledger]
+      parameters: [{ $ref: "#/components/parameters/PostingId" }]
+      responses:
+        "201":
+          description: Appended reversal posting
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LedgerPosting" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Problem" }
+        default: { $ref: "#/components/responses/Problem" }
   /admin/audit-events:
     parameters: *domainContext
     get:
@@ -435,6 +513,27 @@ components:
     ReturnId:
       {
         name: returnId,
+        in: path,
+        required: true,
+        schema: { type: string, format: uuid },
+      }
+    PaymentId:
+      {
+        name: paymentId,
+        in: path,
+        required: true,
+        schema: { type: string, format: uuid },
+      }
+    AssessmentId:
+      {
+        name: assessmentId,
+        in: path,
+        required: true,
+        schema: { type: string, format: uuid },
+      }
+    PostingId:
+      {
+        name: postingId,
         in: path,
         required: true,
         schema: { type: string, format: uuid },
@@ -596,23 +695,156 @@ components:
         minorUnits: { type: integer, minimum: 0, maximum: 6 }
     RecordPayment:
       type: object
-      required: [taxpayerId, assessmentId, amountMinor, currency]
+      required: [taxpayerId, amountMinor, currency]
       additionalProperties: false
       properties:
         taxpayerId: { type: string, format: uuid }
         assessmentId: { type: string, format: uuid }
         amountMinor: { type: integer, format: int64, minimum: 1 }
         currency: { type: string, pattern: "^[A-Z]{3}$" }
+    AllocatePayment:
+      type: object
+      required: [assessmentId, amountMinor, currency, expectedVersion]
+      additionalProperties: false
+      properties:
+        assessmentId: { type: string, format: uuid }
+        amountMinor: { type: integer, format: int64, minimum: 1 }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+    Allocation:
+      type: object
+      required:
+        [assessmentId, amount, postingId, allocatedAt, actorId, correlationId]
+      properties:
+        assessmentId: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/Money" }
+        postingId: { type: string, format: uuid }
+        allocatedAt: { type: string, format: date-time }
+        actorId: { type: string }
+        correlationId: { type: string }
     Payment:
       type: object
-      required: [id, tenantId, jurisdiction, taxpayerId, amount, allocatedTo]
+      required:
+        [
+          id,
+          tenantId,
+          jurisdiction,
+          taxpayerId,
+          amount,
+          allocated,
+          unapplied,
+          status,
+          version,
+          receiptPostingId,
+          allocations,
+        ]
       properties:
         id: { type: string, format: uuid }
         tenantId: { type: string }
         jurisdiction: { type: string }
         taxpayerId: { type: string, format: uuid }
         amount: { $ref: "#/components/schemas/Money" }
-        allocatedTo: { type: string, format: uuid }
+        allocated: { $ref: "#/components/schemas/Money" }
+        unapplied: { $ref: "#/components/schemas/Money" }
+        status:
+          { type: string, enum: [UNAPPLIED, PARTIALLY_ALLOCATED, ALLOCATED] }
+        version: { type: integer, format: int64, minimum: 1 }
+        receiptPostingId: { type: string, format: uuid }
+        allocations:
+          type: array
+          items: { $ref: "#/components/schemas/Allocation" }
+    Assessment:
+      type: object
+      required:
+        [id, tenantId, jurisdiction, returnId, amount, outstanding, postingId]
+      properties:
+        id: { type: string, format: uuid }
+        tenantId: { type: string }
+        jurisdiction: { type: string }
+        returnId: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/Money" }
+        outstanding: { $ref: "#/components/schemas/Money" }
+        postingId: { type: string, format: uuid }
+    LedgerEntry:
+      type: object
+      required:
+        [
+          id,
+          postingId,
+          tenantId,
+          jurisdiction,
+          taxpayerId,
+          entryType,
+          account,
+          debitAmount,
+          creditAmount,
+          referenceType,
+          referenceId,
+          effectiveDate,
+          postedAt,
+          createdBy,
+          correlationId,
+          causationId,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        postingId: { type: string, format: uuid }
+        tenantId: { type: string }
+        jurisdiction: { type: string }
+        taxpayerId: { type: string, format: uuid }
+        entryType: { type: string }
+        account: { type: string }
+        debitAmount: { $ref: "#/components/schemas/Money" }
+        creditAmount: { $ref: "#/components/schemas/Money" }
+        referenceType: { type: string }
+        referenceId: { type: string }
+        effectiveDate: { type: string, format: date-time }
+        postedAt: { type: string, format: date-time }
+        createdBy: { type: string }
+        correlationId: { type: string }
+        causationId: { type: string }
+        reversalOf: { type: string, format: uuid }
+    LedgerPosting:
+      type: object
+      required:
+        [
+          id,
+          tenantId,
+          jurisdiction,
+          referenceType,
+          referenceId,
+          entries,
+          postedAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        tenantId: { type: string }
+        jurisdiction: { type: string }
+        referenceType: { type: string }
+        referenceId: { type: string }
+        entries:
+          type: array
+          minItems: 2
+          items: { $ref: "#/components/schemas/LedgerEntry" }
+        postedAt: { type: string, format: date-time }
+        reversalOf: { type: string, format: uuid }
+    LedgerBalance:
+      type: object
+      required: [currency, receivableMinor, unappliedMinor, netDueMinor]
+      properties:
+        currency: { type: string }
+        receivableMinor: { type: integer, format: int64 }
+        unappliedMinor: { type: integer, format: int64 }
+        netDueMinor: { type: integer, format: int64 }
+    LedgerResponse:
+      type: object
+      required: [entries, balance, asOf]
+      properties:
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/LedgerEntry" }
+        balance: { $ref: "#/components/schemas/LedgerBalance" }
+        asOf: { type: string, format: date-time }
     Problem:
       {
         type: object,
