@@ -129,7 +129,6 @@ func TestTaxpayerRegistrationHTTPVerticalSlice(t *testing.T) {
 		strings.Contains(repeatedApproval.Body.String(), "only a submitted registration") {
 		t.Fatalf("unsafe problem response = %s", repeatedApproval.Body)
 	}
-
 	drafted := httptest.NewRecorder()
 	router.ServeHTTP(drafted, authorizedRequest(
 		t, http.MethodPost, "/api/v1/returns",
